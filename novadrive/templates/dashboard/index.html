@@ -14,7 +14,7 @@
         <div>
           <p class="text-xs uppercase tracking-[0.28em] text-fuchsia-200/70">Current Workspace</p>
           <h2 class="mt-3 text-3xl font-semibold tracking-tight text-white">{{ current_folder.name }}</h2>
-          <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-400">Browse folders, upload new files directly into Discord storage channels, and keep every manifest verified down to the chunk level.</p>
+          <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-400">Browse folders, upload new files through the active {{ configured_storage_backend_label }} backend, and keep every manifest verified down to the chunk level.</p>
         </div>
         <div class="flex gap-3">
           <a href="#upload-zone" class="nova-button-secondary">Upload Files</a>
@@ -28,17 +28,36 @@
         <div>
           <p class="text-xs uppercase tracking-[0.28em] text-slate-500">Usage</p>
           <h3 class="mt-3 text-3xl font-semibold text-white">{{ usage.total_used|filesize }}</h3>
-          <p class="mt-2 text-sm text-slate-400">{{ usage.total_files }} active files</p>
+          <p class="mt-2 text-sm text-slate-400">
+            {{ usage.total_files }} active files
+            {% if usage.is_unlimited %}
+              · Unlimited storage
+            {% else %}
+              · {{ usage.remaining_bytes|filesize }} remaining
+            {% endif %}
+          </p>
         </div>
         <div class="relative flex h-20 w-20 items-center justify-center rounded-full border border-fuchsia-400/20 bg-fuchsia-500/10">
           <div class="absolute inset-2 rounded-full border border-white/10"></div>
-          <span class="text-sm font-semibold text-fuchsia-100">{{ usage.percent_used }}%</span>
+          <span class="text-sm font-semibold text-fuchsia-100">
+            {% if usage.is_unlimited %}
+              inf
+            {% else %}
+              {{ usage.percent_used }}%
+            {% endif %}
+          </span>
         </div>
       </div>
       <div class="mt-6 h-3 rounded-full bg-white/10">
-        <div class="h-3 rounded-full bg-gradient-to-r from-fuchsia-500 to-violet-500" style="width: {{ usage.percent_used }}%"></div>
+        <div class="h-3 rounded-full bg-gradient-to-r from-fuchsia-500 to-violet-500" style="width: {{ 100 if usage.is_unlimited else usage.percent_used }}%"></div>
       </div>
-      <p class="mt-3 text-xs leading-6 text-slate-500">Soft limit reference: {{ usage.soft_limit|filesize }}</p>
+      <p class="mt-3 text-xs leading-6 text-slate-500">
+        {% if usage.is_unlimited %}
+          This account is not capped by a storage quota.
+        {% else %}
+          Account quota: {{ usage.quota_bytes|filesize }}
+        {% endif %}
+      </p>
     </div>
 
     <div class="nova-panel p-6">
@@ -111,14 +130,20 @@
           <div>
             <p class="text-xs uppercase tracking-[0.28em] text-fuchsia-200/70">Upload Pipeline</p>
             <h3 class="mt-2 text-2xl font-semibold text-white">Drop files into NovaDrive</h3>
-            <p class="mt-2 text-sm text-slate-400">Uploads are temporarily buffered, chunked to Discord-safe sizes, and pushed through the bot bridge with per-chunk checksums.</p>
+            <p class="mt-2 text-sm text-slate-400">Uploads are temporarily buffered, chunked, and written through the active storage backend with per-chunk checksums.</p>
+            <p class="mt-3 text-xs leading-6 text-slate-500">
+              Max upload request: <span class="text-white">{{ config.MAX_UPLOAD_SIZE_BYTES|filesize }}</span>
+              {% if config.CLOUDFLARE_TUNNEL_COMPAT %}
+                · Cloudflare {{ config.CLOUDFLARE_TUNNEL_PLAN|title }} compatibility mode
+              {% endif %}
+            </p>
           </div>
           <div class="hidden rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-right text-sm text-slate-400 xl:block">
             Chunk size<br>
             <span class="text-base font-semibold text-white">{{ config.DISCORD_CHUNK_SIZE_BYTES|filesize if config is defined else '' }}</span>
           </div>
         </div>
-        <form action="{{ url_for('files.upload') }}" method="post" enctype="multipart/form-data" class="mt-5" data-upload-form data-ajax-upload="true">
+        <form action="{{ url_for('files.upload') }}" method="post" enctype="multipart/form-data" class="mt-5" data-upload-form data-ajax-upload="true" data-max-upload-bytes="{{ config.MAX_UPLOAD_SIZE_BYTES }}" data-max-upload-label="{{ config.MAX_UPLOAD_SIZE_BYTES|filesize }}" data-cloudflare-compat="{{ 'true' if config.CLOUDFLARE_TUNNEL_COMPAT else 'false' }}" data-cloudflare-plan="{{ config.CLOUDFLARE_TUNNEL_PLAN|title }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="folder_id" value="{{ current_folder.id }}">
           <label class="block cursor-pointer rounded-[28px] border border-dashed border-fuchsia-400/30 bg-gradient-to-br from-fuchsia-500/10 to-violet-500/10 p-8 text-center transition hover:border-fuchsia-300/60 hover:from-fuchsia-500/15 hover:to-violet-500/15" data-upload-dropzone>
@@ -133,8 +158,11 @@
           </div>
           <div class="mt-4 flex items-center justify-between gap-4">
             <p class="text-sm text-slate-400" data-upload-status>Select one or more files to begin.</p>
-            <button type="submit" class="nova-button-primary">Upload to Discord</button>
+            <button type="submit" class="nova-button-primary" {% if not usage.can_upload %}disabled{% endif %}>Upload to {{ configured_storage_backend_label }}</button>
           </div>
+          {% if not usage.can_upload %}
+            <p class="mt-3 text-sm text-amber-200">Your storage is full. Delete files or ask an admin to increase your storage quota{% if not usage.is_unlimited %} beyond {{ usage.quota_bytes|filesize }}{% endif %}.</p>
+          {% endif %}
         </form>
       </div>
 
@@ -193,7 +221,7 @@
           {% else %}
             <div class="rounded-[28px] border border-dashed border-white/10 bg-white/5 p-12 text-center">
               <p class="text-xl font-semibold text-white">Your library is quiet.</p>
-              <p class="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-400">Upload the first file into this folder and NovaDrive will chunk it, ship it to Discord, record the manifest in SQLite, and surface it here instantly.</p>
+              <p class="mx-auto mt-3 max-w-xl text-sm leading-7 text-slate-400">Upload the first file into this folder and NovaDrive will chunk it, push it through the active backend, record the manifest in SQLite, and surface it here instantly.</p>
             </div>
           {% endif %}
         </div>
@@ -213,6 +241,206 @@
           </div>
           <button type="submit" class="nova-button-primary w-full">Create Folder</button>
         </form>
+      </div>
+
+      <div class="nova-panel p-5">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="text-xs uppercase tracking-[0.28em] text-fuchsia-200/70">ShareX API</p>
+            <h3 class="mt-2 text-2xl font-semibold text-white">Token and uploader config</h3>
+            <p class="mt-2 text-sm leading-7 text-slate-400">Generate a per-user API key, then import the NovaDrive `.sxcu` file into ShareX for file, image, and text uploads straight into this folder.</p>
+          </div>
+          <a href="{{ url_for('api.sharex_config', folder_id=current_folder.id) }}" class="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-slate-200 transition hover:border-fuchsia-400/40 hover:bg-white/10">Download Fresh SXCU</a>
+        </div>
+
+        <div class="mt-5 space-y-4">
+          <div class="rounded-3xl border border-white/10 bg-white/5 p-4">
+            <p class="text-xs uppercase tracking-[0.24em] text-slate-500">Upload endpoint</p>
+            <p class="mt-2 break-all text-sm text-white">{{ external_url('api.sharex_upload', folder_id=current_folder.id) }}</p>
+            <p class="mt-2 text-xs leading-6 text-slate-500">Downloading a fresh `.sxcu` will embed the current plaintext key. If this browser no longer has it, NovaDrive rotates the key automatically.</p>
+          </div>
+
+          {% if generated_api_key %}
+            <div class="rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+              <p class="text-xs uppercase tracking-[0.24em] text-emerald-200/80">New API key</p>
+              <div class="mt-3 flex flex-col gap-3 sm:flex-row">
+                <input type="text" readonly value="{{ generated_api_key }}" class="nova-input flex-1">
+                <button type="button" class="rounded-2xl border border-emerald-300/30 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/20" data-copy-text="{{ generated_api_key }}">Copy Key</button>
+              </div>
+              <p class="mt-3 text-xs leading-6 text-emerald-100/80">This value is only shown once. Regenerate if you lose it.</p>
+            </div>
+          {% else %}
+            <div class="rounded-3xl border border-white/10 bg-white/5 p-4">
+              <p class="text-xs uppercase tracking-[0.24em] text-slate-500">Current key</p>
+              {% if current_user.has_api_key %}
+                <p class="mt-2 text-sm text-white">Stored and active{% if current_user.api_key_last4 %} ending in <span class="font-mono">{{ current_user.api_key_last4 }}</span>{% endif %}</p>
+                <p class="mt-2 text-xs text-slate-500">Created {{ current_user.api_key_created_at|datetime }}</p>
+              {% else %}
+                <p class="mt-2 text-sm text-slate-400">No API key has been generated for this account yet.</p>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          <div class="flex flex-wrap gap-3">
+            <form action="{{ url_for('auth.regenerate_api_key') }}" method="post" class="flex-1">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="nova-button-primary w-full">{{ "Regenerate API Key" if current_user.has_api_key else "Generate API Key" }}</button>
+            </form>
+            {% if current_user.has_api_key %}
+              <form action="{{ url_for('auth.revoke_api_key') }}" method="post" class="flex-1">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="w-full rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-100 transition hover:bg-rose-500/20" data-confirm-submit data-confirm-title="Revoke API key?" data-confirm-body="ShareX uploads using the current key will stop working until you generate a new one.">Revoke</button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div id="security-panel" class="nova-panel p-5">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="text-xs uppercase tracking-[0.28em] text-fuchsia-200/70">Account Security</p>
+            <h3 class="mt-2 text-2xl font-semibold text-white">Two-factor authentication</h3>
+            <p class="mt-2 text-sm leading-7 text-slate-400">Protect browser sign-in with a time-based 6-digit code after your normal username/email and password.</p>
+          </div>
+          <span class="rounded-full border {% if current_user.is_two_factor_enabled %}border-emerald-400/20 bg-emerald-500/10 text-emerald-100{% else %}border-amber-400/20 bg-amber-500/10 text-amber-100{% endif %} px-3 py-1 text-xs">
+            {{ "Enabled" if current_user.is_two_factor_enabled else "Disabled" }}
+          </span>
+        </div>
+
+        {% if current_user.is_two_factor_enabled %}
+          <div class="mt-5 rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+            <p class="text-sm font-medium text-emerald-100">Two-factor authentication is active on this account.</p>
+            <p class="mt-2 text-sm leading-7 text-emerald-50/90">Every browser login now requires a 6-digit code from your authenticator app after the password step.</p>
+            {% if current_user.two_factor_enabled_at %}
+              <p class="mt-2 text-xs text-emerald-100/80">Enabled {{ current_user.two_factor_enabled_at|datetime }}</p>
+            {% endif %}
+          </div>
+          <form action="{{ url_for('auth.disable_two_factor') }}" method="post" class="mt-5 space-y-4">
+            {{ two_factor_disable_form.hidden_tag() }}
+            <div>
+              <label class="mb-2 block text-sm font-medium text-slate-200" for="{{ two_factor_disable_form.password.id }}">Current password</label>
+              {{ two_factor_disable_form.password(class="nova-input", placeholder="Enter your current password") }}
+            </div>
+            <div>
+              <label class="mb-2 block text-sm font-medium text-slate-200" for="{{ two_factor_disable_form.code.id }}">Current authentication code</label>
+              {{ two_factor_disable_form.code(class="nova-input", placeholder="123456", inputmode="numeric", autocomplete="one-time-code") }}
+            </div>
+            <button type="submit" class="w-full rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-100 transition hover:bg-rose-500/20" data-confirm-submit data-confirm-title="Disable two-factor authentication?" data-confirm-body="Future browser logins will go back to password-only access until you enable 2FA again.">Disable 2FA</button>
+          </form>
+        {% else %}
+          <div class="mt-5 rounded-3xl border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+            <p>Recommended apps: Google Authenticator, Microsoft Authenticator, 1Password, Authy, or any TOTP-compatible authenticator.</p>
+            <p class="mt-2">Issuer label: <span class="text-white">{{ config.TWO_FACTOR_ISSUER_NAME }}</span></p>
+          </div>
+
+          {% if two_factor_setup_secret %}
+            <div class="mt-5 space-y-4">
+              <div class="rounded-3xl border border-fuchsia-400/20 bg-fuchsia-500/10 p-4">
+                <p class="text-xs uppercase tracking-[0.24em] text-fuchsia-200/80">Step 1</p>
+                <p class="mt-2 text-sm font-medium text-white">Add this setup key to your authenticator app.</p>
+                <div class="mt-3 flex flex-col gap-3 sm:flex-row">
+                  <input type="text" readonly value="{{ two_factor_setup_secret }}" class="nova-input flex-1 font-mono tracking-[0.22em]">
+                  <button type="button" class="rounded-2xl border border-fuchsia-300/30 bg-fuchsia-500/10 px-4 py-3 text-sm font-medium text-fuchsia-100 transition hover:bg-fuchsia-500/20" data-copy-text="{{ two_factor_setup_secret }}">Copy Key</button>
+                </div>
+                <p class="mt-3 text-xs leading-6 text-fuchsia-100/80">If your app supports manual entry, use a time-based TOTP account and this exact secret.</p>
+              </div>
+
+              <div class="rounded-3xl border border-white/10 bg-white/5 p-4">
+                <p class="text-xs uppercase tracking-[0.24em] text-slate-500">Step 2</p>
+                <p class="mt-2 text-sm font-medium text-white">If your app accepts an otpauth URI, use this provisioning string.</p>
+                <div class="mt-3 flex flex-col gap-3 sm:flex-row">
+                  <input type="text" readonly value="{{ two_factor_setup_uri }}" class="nova-input flex-1">
+                  <button type="button" class="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-fuchsia-400/40 hover:bg-white/10" data-copy-text="{{ two_factor_setup_uri }}">Copy URI</button>
+                </div>
+              </div>
+
+              <form action="{{ url_for('auth.confirm_two_factor_setup') }}" method="post" class="space-y-4">
+                {{ two_factor_setup_form.hidden_tag() }}
+                <div>
+                  <label class="mb-2 block text-sm font-medium text-slate-200" for="{{ two_factor_setup_form.code.id }}">Step 3: enter the current 6-digit code</label>
+                  {{ two_factor_setup_form.code(class="nova-input", placeholder="123456", inputmode="numeric", autocomplete="one-time-code") }}
+                </div>
+                <button type="submit" class="nova-button-primary w-full">Enable 2FA</button>
+              </form>
+              <form action="{{ url_for('auth.cancel_two_factor_setup') }}" method="post">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-fuchsia-400/40 hover:bg-white/10">Cancel Setup</button>
+              </form>
+            </div>
+          {% else %}
+            <form action="{{ url_for('auth.start_two_factor_setup') }}" method="post" class="mt-5">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="nova-button-primary w-full">Generate 2FA Setup Secret</button>
+            </form>
+          {% endif %}
+        {% endif %}
+      </div>
+
+      <div class="nova-panel p-5">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <p class="text-xs uppercase tracking-[0.28em] text-fuchsia-200/70">WebDAV</p>
+            <h3 class="mt-2 text-2xl font-semibold text-white">Desktop and mobile drive access</h3>
+            <p class="mt-2 text-sm leading-7 text-slate-400">Connect NovaDrive from WebDAV-capable clients for direct folder browsing, upload, download, create, delete, and move operations against your own drive using a dedicated app password.</p>
+          </div>
+          <span class="rounded-full border {% if config.WEBDAV_ENABLED %}border-emerald-400/20 bg-emerald-500/10 text-emerald-100{% else %}border-rose-400/20 bg-rose-500/10 text-rose-100{% endif %} px-3 py-1 text-xs">
+            {{ "Enabled" if config.WEBDAV_ENABLED else "Disabled" }}
+          </span>
+        </div>
+
+        <div class="mt-5 space-y-4">
+          <div class="rounded-3xl border border-white/10 bg-white/5 p-4">
+            <p class="text-xs uppercase tracking-[0.24em] text-slate-500">Endpoint</p>
+            <p class="mt-2 break-all text-sm text-white">{{ external_url('webdav.dispatch', resource_path='') }}</p>
+          </div>
+          <div class="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300">
+            <p>Username: <span class="text-white">{{ current_user.username }}</span> or <span class="text-white">{{ current_user.email }}</span></p>
+            <p class="mt-2">Password: your generated WebDAV app password, not your normal NovaDrive login password</p>
+            <p class="mt-2">Scope: only your own drive, not the global admin view</p>
+            <p class="mt-2">Regenerating the app password invalidates the previous one immediately for this account.</p>
+            {% if current_user.is_two_factor_enabled %}
+              <p class="mt-2 text-amber-200">Browser 2FA stays on your web login, while WebDAV uses this separate app password.</p>
+            {% endif %}
+            {% if config.EMAIL_VERIFICATION_REQUIRED %}
+              <p class="mt-2 text-amber-200">Email verification is still required before WebDAV access is allowed.</p>
+            {% endif %}
+          </div>
+
+          {% if generated_webdav_password %}
+            <div class="rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-4">
+              <p class="text-xs uppercase tracking-[0.24em] text-emerald-200/80">New WebDAV app password</p>
+              <div class="mt-3 flex flex-col gap-3 sm:flex-row">
+                <input type="text" readonly value="{{ generated_webdav_password }}" class="nova-input flex-1">
+                <button type="button" class="rounded-2xl border border-emerald-300/30 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-100 transition hover:bg-emerald-500/20" data-copy-text="{{ generated_webdav_password }}">Copy Password</button>
+              </div>
+              <p class="mt-3 text-xs leading-6 text-emerald-100/80">This value is only shown once. Save it in your WebDAV client or password manager now.</p>
+            </div>
+          {% else %}
+            <div class="rounded-3xl border border-white/10 bg-white/5 p-4">
+              <p class="text-xs uppercase tracking-[0.24em] text-slate-500">Current WebDAV app password</p>
+              {% if current_user.has_webdav_password %}
+                <p class="mt-2 text-sm text-white">Stored and active{% if current_user.webdav_password_last4 %} ending in <span class="font-mono">{{ current_user.webdav_password_last4 }}</span>{% endif %}</p>
+                <p class="mt-2 text-xs text-slate-500">Created {{ current_user.webdav_password_created_at|datetime }}</p>
+              {% else %}
+                <p class="mt-2 text-sm text-slate-400">No WebDAV app password has been generated for this account yet.</p>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          <div class="flex flex-wrap gap-3">
+            <form action="{{ url_for('auth.regenerate_webdav_password') }}" method="post" class="flex-1">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="nova-button-primary w-full">{{ "Regenerate WebDAV App Password" if current_user.has_webdav_password else "Generate WebDAV App Password" }}</button>
+            </form>
+            {% if current_user.has_webdav_password %}
+              <form action="{{ url_for('auth.revoke_webdav_password') }}" method="post" class="flex-1">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="w-full rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-100 transition hover:bg-rose-500/20" data-confirm-submit data-confirm-title="Revoke WebDAV app password?" data-confirm-body="Any connected WebDAV clients using the current app password will stop working until you generate a new one.">Revoke</button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
       </div>
 
       <div class="nova-panel p-5">
@@ -239,10 +467,15 @@
 
       <div class="nova-panel p-5">
         <p class="text-xs uppercase tracking-[0.28em] text-slate-500">How It Works</p>
-        <h3 class="mt-2 text-2xl font-semibold text-white">Discord storage model</h3>
+        <h3 class="mt-2 text-2xl font-semibold text-white">{{ configured_storage_backend_label }} storage model</h3>
         <div class="mt-5 space-y-4 text-sm leading-7 text-slate-400">
-          <p>Uploads are buffered temporarily, hashed, chunked below the configured Discord attachment ceiling, and sent to the bot bridge.</p>
-          <p>Every chunk stores its Discord channel ID, message ID, attachment URL, size, and SHA256 in SQLite for indexed reconstruction.</p>
+          {% if configured_storage_backend == "discord" %}
+            <p>Uploads are buffered temporarily, hashed, chunked below the configured Discord attachment ceiling, and sent to the bot bridge.</p>
+            <p>Every chunk stores its Discord channel ID, message ID, attachment URL, size, and SHA256 in SQLite for indexed reconstruction.</p>
+          {% else %}
+            <p>Uploads are buffered temporarily, hashed, chunked into manifest entries, and written into the configured S3-compatible bucket.</p>
+            <p>Every chunk stores its bucket target, object key, locator, size, and SHA256 in SQLite for indexed reconstruction.</p>
+          {% endif %}
           <p>Downloads fetch chunks in exact sequence, validate each checksum, rebuild the file, and verify the final hash before serving it.</p>
         </div>
       </div>

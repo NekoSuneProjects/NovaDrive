@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Login · NovaDrive{% endblock %}
+{% block title %}Login - NovaDrive{% endblock %}
 {% block content %}
 <div class="mx-auto grid min-h-[calc(100vh-3rem)] max-w-7xl items-center gap-8 lg:grid-cols-[1.1fr,0.9fr]">
   <section class="relative overflow-hidden rounded-[32px] border border-white/10 bg-white/5 p-8 shadow-[0_40px_120px_rgba(0,0,0,0.4)] backdrop-blur-2xl sm:p-10 lg:p-14">
@@ -8,9 +8,9 @@
       <div class="inline-flex items-center gap-3 rounded-full border border-fuchsia-400/20 bg-fuchsia-500/10 px-4 py-2 text-sm text-fuchsia-100">
         <span class="font-display text-base font-semibold tracking-tight">NovaDrive</span>
         <span class="h-1.5 w-1.5 rounded-full bg-fuchsia-300"></span>
-        <span>Discord-native cloud storage</span>
+        <span>{{ configured_storage_backend_label }}-backed cloud storage</span>
       </div>
-      <h1 class="mt-8 max-w-2xl font-display text-4xl font-bold tracking-tight text-white sm:text-5xl">Store and rebuild files through Discord with a premium drive experience.</h1>
+      <h1 class="mt-8 max-w-2xl font-display text-4xl font-bold tracking-tight text-white sm:text-5xl">Store, preview, and rebuild files with a polished self-hosted drive experience.</h1>
       <p class="mt-6 max-w-2xl text-base leading-8 text-slate-300">NovaDrive keeps your upload flow clean, your chunk manifests verifiable, and your file browser feeling like a real product from day one.</p>
       <div class="mt-10 grid gap-4 sm:grid-cols-3">
         <div class="rounded-3xl border border-white/10 bg-black/20 p-5">
@@ -20,13 +20,13 @@
         </div>
         <div class="rounded-3xl border border-white/10 bg-black/20 p-5">
           <p class="text-xs uppercase tracking-[0.28em] text-slate-500">Storage</p>
-          <p class="mt-3 text-2xl font-semibold text-white">Discord</p>
+          <p class="mt-3 text-2xl font-semibold text-white">{{ configured_storage_backend_label }}</p>
           <p class="mt-2 text-sm text-slate-400">Chunked, indexed, and ready for retrieval.</p>
         </div>
         <div class="rounded-3xl border border-white/10 bg-black/20 p-5">
           <p class="text-xs uppercase tracking-[0.28em] text-slate-500">UX</p>
           <p class="mt-3 text-2xl font-semibold text-white">Glass</p>
-          <p class="mt-2 text-sm text-slate-400">Smooth dark-mode dashboard polish.</p>
+          <p class="mt-2 text-sm text-slate-400">Smooth dashboard polish and operator-friendly flows.</p>
         </div>
       </div>
     </div>
@@ -36,7 +36,7 @@
     <div class="mb-8">
       <p class="text-xs uppercase tracking-[0.28em] text-fuchsia-200/70">Welcome Back</p>
       <h2 class="mt-3 text-3xl font-semibold tracking-tight text-white">Sign in to your drive</h2>
-      <p class="mt-3 text-sm leading-7 text-slate-400">Use your NovaDrive credentials to open the dashboard, manage folders, and ship files into Discord storage channels.</p>
+      <p class="mt-3 text-sm leading-7 text-slate-400">Use your NovaDrive credentials to open the dashboard, manage folders, and upload files through the active storage backend.</p>
     </div>
 
     <form method="post" class="space-y-5">
@@ -47,7 +47,7 @@
       </div>
       <div>
         <label class="mb-2 block text-sm font-medium text-slate-200" for="{{ form.password.id }}">Password</label>
-        {{ form.password(class="nova-input", placeholder="••••••••") }}
+        {{ form.password(class="nova-input", placeholder="********") }}
       </div>
       <label class="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
         {{ form.remember(class="h-4 w-4 rounded border-white/20 bg-white/10 text-fuchsia-500 focus:ring-fuchsia-500") }}
@@ -56,10 +56,35 @@
       <button type="submit" class="nova-button-primary w-full">Sign In</button>
     </form>
 
-    <p class="mt-6 text-sm text-slate-400">
-      Need an account?
-      <a href="{{ url_for('auth.register') }}" class="font-medium text-fuchsia-200 transition hover:text-white">Create one</a>
-    </p>
+    {% if config.SMTP_HOST and config.SMTP_FROM_EMAIL %}
+      <p class="mt-4 text-sm text-slate-400">
+        Forgot your password?
+        <a href="{{ url_for('auth.forgot_password') }}" class="font-medium text-fuchsia-200 transition hover:text-white">Send a recovery link</a>
+      </p>
+    {% endif %}
+
+    {% if pending_verification_email %}
+      <div class="mt-5 rounded-3xl border border-amber-400/20 bg-amber-500/10 p-4">
+        <p class="text-sm font-medium text-amber-100">Email confirmation is still pending for {{ pending_verification_email }}.</p>
+        <p class="mt-2 text-sm leading-7 text-amber-50/90">Use the link from your inbox, or request a fresh verification email below.</p>
+        <form action="{{ url_for('auth.resend_verification') }}" method="post" class="mt-4">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="email" value="{{ pending_verification_email }}">
+          <button type="submit" class="rounded-2xl border border-amber-300/30 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-50 transition hover:bg-amber-500/20">Resend Verification Email</button>
+        </form>
+      </div>
+    {% endif %}
+
+    {% if config.ALLOW_PUBLIC_REGISTRATION %}
+      <p class="mt-6 text-sm text-slate-400">
+        Need an account?
+        <a href="{{ url_for('auth.register') }}" class="font-medium text-fuchsia-200 transition hover:text-white">Create one</a>
+      </p>
+    {% else %}
+      <div class="mt-6 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm leading-7 text-slate-300">
+        Public registration is disabled on this NovaDrive instance. Ask an admin to create an account for you.
+      </div>
+    {% endif %}
   </section>
 </div>
 {% endblock %}

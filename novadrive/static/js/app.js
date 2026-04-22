@@ -1,5 +1,21 @@
 const toastDismissDelay = 5000;
 
+function formatBytes(value) {
+  if (!Number.isFinite(value) || value < 0) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = Number(value);
+
+  for (const unit of units) {
+    if (size < 1024 || unit === units[units.length - 1]) {
+      if (unit === "B") return `${Math.round(size)} ${unit}`;
+      return `${size.toFixed(1)} ${unit}`;
+    }
+    size /= 1024;
+  }
+
+  return `${value} B`;
+}
+
 function initToasts() {
   document.querySelectorAll("[data-toast]").forEach((toast) => {
     const closeButton = toast.querySelector("[data-dismiss-toast]");
@@ -115,14 +131,41 @@ function initUploads() {
     const progressShell = form.querySelector("[data-upload-progress-shell]");
     const progressBar = form.querySelector("[data-upload-progress]");
     const status = form.querySelector("[data-upload-status]");
+    const maxUploadBytes = Number(form.dataset.maxUploadBytes || 0);
+    const maxUploadLabel = form.dataset.maxUploadLabel || formatBytes(maxUploadBytes);
+    const cloudflareCompat = form.dataset.cloudflareCompat === "true";
+    const cloudflarePlan = form.dataset.cloudflarePlan || "Free";
 
     if (!dropzone || !input || !progressShell || !progressBar || !status) return;
 
+    const totalBytesFor = (files) => Array.from(files || []).reduce((sum, file) => sum + (file.size || 0), 0);
+
+    const uploadLimitMessage = (files, totalBytes) => {
+      const subject = files && files.length === 1 ? "This file" : "These files";
+      if (cloudflareCompat) {
+        return `${subject} cannot be uploaded because this NovaDrive instance is running through Cloudflare ${cloudflarePlan} tier compatibility mode. Maximum upload size: ${maxUploadLabel}. Selected size: ${formatBytes(totalBytes)}.`;
+      }
+      return `${subject} cannot be uploaded because the selected size ${formatBytes(totalBytes)} exceeds the upload limit of ${maxUploadLabel}.`;
+    };
+
+    const updateSelectionStatus = (files) => {
+      if (!files || files.length === 0) {
+        status.textContent = "Select one or more files to begin.";
+        return;
+      }
+
+      const totalBytes = totalBytesFor(files);
+      if (maxUploadBytes > 0 && totalBytes > maxUploadBytes) {
+        status.textContent = uploadLimitMessage(files, totalBytes);
+        return;
+      }
+
+      status.textContent = `${files.length} file(s) ready to upload (${formatBytes(totalBytes)} total).`;
+    };
+
     const setFiles = (files) => {
       input.files = files;
-      if (files.length > 0) {
-        status.textContent = `${files.length} file(s) ready to upload.`;
-      }
+      updateSelectionStatus(files);
     };
 
     ["dragenter", "dragover"].forEach((eventName) => {
@@ -148,9 +191,7 @@ function initUploads() {
     });
 
     input.addEventListener("change", () => {
-      if (input.files?.length) {
-        status.textContent = `${input.files.length} file(s) ready to upload.`;
-      }
+      updateSelectionStatus(input.files);
     });
 
     form.addEventListener("submit", (event) => {
@@ -159,6 +200,14 @@ function initUploads() {
 
       if (!input.files || input.files.length === 0) {
         toastMessage("Choose at least one file before uploading.", "error");
+        return;
+      }
+
+      const totalBytes = totalBytesFor(input.files);
+      if (maxUploadBytes > 0 && totalBytes > maxUploadBytes) {
+        const message = uploadLimitMessage(input.files, totalBytes);
+        toastMessage(message, "error");
+        status.textContent = message;
         return;
       }
 
