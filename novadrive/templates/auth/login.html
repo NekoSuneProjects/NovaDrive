@@ -56,6 +56,13 @@
       <button type="submit" class="nova-button-primary w-full">Sign In</button>
     </form>
 
+    {% if config.SMTP_HOST and config.SMTP_FROM_EMAIL %}
+      <p class="mt-4 text-sm text-slate-400">
+        Forgot your password?
+        <a href="{{ url_for('auth.forgot_password') }}" class="font-medium text-fuchsia-200 transition hover:text-white">Send a recovery link</a>
+      </p>
+    {% endif %}
+
     {% if pending_verification_email %}
       <div class="mt-5 rounded-3xl border border-amber-400/20 bg-amber-500/10 p-4">
         <p class="text-sm font-medium text-amber-100">Email confirmation is still pending for {{ pending_verification_email }}.</p>

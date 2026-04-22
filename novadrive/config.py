@@ -187,6 +187,14 @@ class Config:
         os.getenv("EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS"),
         60,
     )
+    PASSWORD_RESET_MAX_AGE_SECONDS = _as_int(
+        os.getenv("PASSWORD_RESET_MAX_AGE_SECONDS"),
+        3_600,
+    )
+    PASSWORD_RESET_RESEND_INTERVAL_SECONDS = _as_int(
+        os.getenv("PASSWORD_RESET_RESEND_INTERVAL_SECONDS"),
+        60,
+    )
 
     SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
     SMTP_PORT = _as_int(os.getenv("SMTP_PORT"), 587)

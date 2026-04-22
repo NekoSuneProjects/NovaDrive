@@ -29,9 +29,14 @@
             <p class="text-xs uppercase tracking-[0.28em] text-slate-500">Account</p>
             <h3 class="mt-2 text-2xl font-semibold text-white">Profile and access</h3>
           </div>
-          <span class="rounded-full border {% if target_user.is_email_verified %}border-emerald-400/20 bg-emerald-500/10 text-emerald-100{% else %}border-amber-400/20 bg-amber-500/10 text-amber-100{% endif %} px-3 py-1 text-xs">
-            {{ "Verified" if target_user.is_email_verified else "Pending verification" }}
-          </span>
+          <div class="flex flex-wrap gap-2">
+            <span class="rounded-full border {% if target_user.is_email_verified %}border-emerald-400/20 bg-emerald-500/10 text-emerald-100{% else %}border-amber-400/20 bg-amber-500/10 text-amber-100{% endif %} px-3 py-1 text-xs">
+              {{ "Verified" if target_user.is_email_verified else "Pending verification" }}
+            </span>
+            {% if target_user.must_change_password %}
+              <span class="rounded-full border border-amber-400/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-100">Password change required</span>
+            {% endif %}
+          </div>
         </div>
         <form action="{{ url_for('admin.update_user_profile', user_id=target_user.id) }}" method="post" class="mt-5 space-y-4">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -57,15 +62,26 @@
             </div>
           </div>
           <div>
-            <label class="mb-2 block text-sm font-medium text-slate-200">Reset password</label>
+            <label class="mb-2 block text-sm font-medium text-slate-200">Set new password</label>
             <input type="password" name="password" class="nova-input" placeholder="Leave blank to keep the existing password">
+            <p class="mt-2 text-xs leading-6 text-slate-500">Use this if the user lost access and you need to assign a temporary password from the admin panel.</p>
           </div>
           <label class="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
             <input type="checkbox" name="email_verified" class="h-4 w-4 rounded border-white/20 bg-transparent text-fuchsia-500" {% if target_user.is_email_verified %}checked{% endif %}>
             Email verified
           </label>
+          <label class="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-300">
+            <input type="checkbox" name="must_change_password" class="h-4 w-4 rounded border-white/20 bg-transparent text-fuchsia-500" {% if target_user.must_change_password %}checked{% endif %}>
+            Force password change on next login
+          </label>
           <button type="submit" class="nova-button-primary w-full">Save Profile</button>
         </form>
+        {% if config.SMTP_HOST and config.SMTP_FROM_EMAIL %}
+          <form action="{{ url_for('admin.send_user_password_reset', user_id=target_user.id) }}" method="post" class="mt-4">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="nova-button-secondary w-full">Send Password Recovery Email</button>
+          </form>
+        {% endif %}
       </div>
 
       <div class="nova-panel p-6">

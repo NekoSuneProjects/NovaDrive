@@ -28,11 +28,14 @@ class User(UserMixin, TimestampMixin, db.Model):
     username = db.Column(db.String(32), unique=True, nullable=False, index=True)
     email = db.Column(db.String(255), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    password_changed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    must_change_password = db.Column(db.Boolean, nullable=False, default=False)
     role = db.Column(db.String(16), nullable=False, default="user", index=True)
     storage_quota_bytes = db.Column(db.BigInteger, nullable=False, default=0)
     last_login_at = db.Column(db.DateTime(timezone=True), nullable=True)
     email_verified_at = db.Column(db.DateTime(timezone=True), nullable=True)
     email_verification_sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    password_reset_sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
     two_factor_secret = db.Column(db.String(64), nullable=True)
     two_factor_pending_secret = db.Column(db.String(64), nullable=True)
     two_factor_enabled_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -81,6 +84,10 @@ class User(UserMixin, TimestampMixin, db.Model):
         return bool(self.webdav_password_hash)
 
     @property
+    def requires_password_change(self) -> bool:
+        return bool(self.must_change_password)
+
+    @property
     def is_email_verified(self) -> bool:
         return self.email_verified_at is not None
 
@@ -98,6 +105,7 @@ class User(UserMixin, TimestampMixin, db.Model):
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
+        self.password_changed_at = utcnow()
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)

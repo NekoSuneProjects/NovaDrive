@@ -24,6 +24,7 @@ This repo gives you a clean base to keep building from.
 - One-time bootstrap admin account with forced username, email, and password rotation on first sign-in
 - Public registration toggle so the site can run as login-only while admins create accounts manually
 - Optional SMTP-backed email verification for account activation
+- SMTP-backed password recovery links with signed reset URLs
 - Optional TOTP two-factor authentication for browser login
 - WebDAV support for direct upload, download, folder creation, delete, and move from desktop/mobile clients using per-user app passwords
 - S3-compatible storage mode for AWS S3, MinIO, and other compatible providers
@@ -132,11 +133,12 @@ README.md                 You are here
 - One-time bootstrap admin account is created automatically on a fresh database
 - Public self-registration can be disabled so only admin-created accounts can sign in
 - Optional email verification before password login and WebDAV access
+- Optional password recovery emails with signed, time-limited reset URLs
 - Optional TOTP-based two-factor authentication for browser logins
 - Per-user WebDAV app password generation and rotation without exposing the main account password to clients
 - Basic `admin` and `user` role model with admin role reassignment from the admin console
 - Default per-user storage caps with admin-adjustable per-account quota overrides
-- Admin-created accounts with controlled verification state and role assignment
+- Admin-created accounts with controlled verification state, role assignment, direct password resets, and forced password change on next login
 
 ### File management
 
@@ -190,7 +192,7 @@ README.md                 You are here
 - Storage config visibility
 - User role management
 - Per-user storage quota management
-- User profile editing, password resets, verification toggles, and direct workspace browsing
+- User profile editing, password resets, forced password change flags, verification toggles, and direct workspace browsing
 - Admin-side file and folder deletion inside a selected user's drive
 - Default admin bootstrap protection so only one built-in admin account is ever auto-created
 
@@ -322,6 +324,8 @@ If `EMAIL_VERIFICATION_REQUIRED=true`, new accounts must confirm their email bef
 
 If `ALLOW_PUBLIC_REGISTRATION=false`, the public `/auth/register` page is disabled and users must be created by an admin or through the CLI.
 
+If SMTP is configured, NovaDrive also exposes a `Forgot password?` flow on the login page and a password recovery action inside the admin user details screen.
+
 If NovaDrive sits behind nginx, Traefik, Caddy, Cloudflare, or another reverse proxy, set `APP_EXTERNAL_URL` to the public host you want NovaDrive to generate:
 
 ```text
@@ -399,6 +403,8 @@ Recommended bot permissions:
 | `EMAIL_VERIFICATION_REQUIRED` | Require email confirmation before password login | `true` |
 | `EMAIL_VERIFICATION_MAX_AGE_SECONDS` | Verification link lifetime | `86400` |
 | `EMAIL_VERIFICATION_RESEND_INTERVAL_SECONDS` | Minimum resend interval | `60` |
+| `PASSWORD_RESET_MAX_AGE_SECONDS` | Password recovery link lifetime in seconds | `3600` |
+| `PASSWORD_RESET_RESEND_INTERVAL_SECONDS` | Minimum interval between password recovery emails to the same account | `60` |
 | `SMTP_HOST` | SMTP host for outbound mail | `smtp.mailgun.org` |
 | `SMTP_PORT` | SMTP port | `587` |
 | `SMTP_USERNAME` | SMTP username | `postmaster@example.com` |
@@ -464,6 +470,16 @@ NovaDrive now supports per-account TOTP 2FA for browser login.
 4. Add the displayed secret to your authenticator app, or import the shown `otpauth://` URI if your app supports it.
 5. Enter the current 6-digit code from the app and click `Enable 2FA`.
 6. On the next browser login, NovaDrive will ask for the 6-digit code after your password.
+
+## Password recovery quick start
+
+NovaDrive supports two ways to recover or rotate lost user passwords.
+
+1. Self-service: use the `Forgot your password?` link on the login page and submit the account email address.
+2. Admin-assisted: open the user in the admin console and either set a temporary password directly or send a password recovery email from that user details page.
+3. The recovery email contains a long signed reset URL.
+4. Opening the link takes the user to the password reset page where they can choose a new password.
+5. When the reset completes, NovaDrive invalidates older stored sessions for that account.
 
 ## WebDAV quick start
 
@@ -538,6 +554,7 @@ NovaDrive already includes a solid MVP baseline:
 - Share links can be disabled globally or set to expire
 - API keys are stored as SHA256 hashes, not plaintext
 - WebDAV app passwords are stored as SHA256 hashes, not plaintext
+- Password reset links are signed and time-limited
 - Verification links are signed and time-limited
 - Per-user storage quotas are enforced across browser uploads, ShareX, and WebDAV
 

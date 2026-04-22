@@ -10,22 +10,21 @@ from novadrive.extensions import db
 from novadrive.models import User, utcnow
 from novadrive.forms import (
     DefaultAdminSetupForm,
+    ForgotPasswordForm,
     LoginForm,
+    PasswordResetForm,
     RegistrationForm,
     TwoFactorChallengeForm,
     TwoFactorDisableForm,
 )
 from novadrive.services.auth_service import AuthService
-from novadrive.services.email_service import EmailDeliveryError
+from novadrive.services.email_service import EmailDeliveryError, EmailService
 from novadrive.services.verification_service import VerificationService, VerificationTokenError
+from novadrive.utils.session_state import clear_novadrive_session_state
 from novadrive.utils.urls import external_url
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
-TWO_FACTOR_LOGIN_SESSION_KEYS = (
-    "nova_2fa_user_id",
-    "nova_2fa_remember",
-    "nova_2fa_next",
-)
+TWO_FACTOR_LOGIN_SESSION_KEYS = ("nova_2fa_user_id", "nova_2fa_remember", "nova_2fa_next")
 
 
 @auth_bp.route("/register", methods=["GET", "POST"])
@@ -117,6 +116,73 @@ def login():
     )
 
 
+@auth_bp.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard.index"))
+
+    form = ForgotPasswordForm()
+    if form.validate_on_submit():
+        if not EmailService.is_configured(current_app.config):
+            flash("Password recovery email is unavailable because SMTP is not configured.", "error")
+            return render_template("auth/forgot_password.html", form=form)
+
+        user = AuthService.find_by_email(form.email.data)
+        if user:
+            resend_interval = current_app.config["PASSWORD_RESET_RESEND_INTERVAL_SECONDS"]
+            last_sent_at = user.password_reset_sent_at
+            if not last_sent_at or last_sent_at + timedelta(seconds=resend_interval) <= utcnow():
+                try:
+                    _send_password_reset_email(user)
+                except EmailDeliveryError as exc:
+                    flash(str(exc), "error")
+                    return render_template("auth/forgot_password.html", form=form)
+
+        flash(
+            "If that account exists, a password recovery link has been sent to the email address on file.",
+            "success",
+        )
+        return redirect(url_for("auth.login"))
+
+    return render_template("auth/forgot_password.html", form=form)
+
+
+@auth_bp.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token: str):
+    if current_user.is_authenticated and not AuthService.must_change_password(current_user):
+        return redirect(url_for("dashboard.index"))
+
+    form = PasswordResetForm()
+    try:
+        target_user = _load_password_reset_user(token)
+    except VerificationTokenError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("auth.forgot_password"))
+
+    if form.validate_on_submit():
+        try:
+            AuthService.complete_password_recovery(
+                target_user,
+                password=form.password.data,
+                actor_id=target_user.id,
+            )
+            AuthService.deactivate_all_user_sessions(target_user)
+            if current_user.is_authenticated:
+                logout_user()
+                clear_novadrive_session_state(session)
+            _clear_pending_two_factor_login()
+            flash("Password updated successfully. You can sign in with the new password now.", "success")
+            return redirect(url_for("auth.login", email=target_user.email))
+        except ValueError as exc:
+            flash(str(exc), "error")
+
+    return render_template(
+        "auth/reset_password.html",
+        form=form,
+        reset_email=target_user.email,
+    )
+
+
 @auth_bp.route("/login/two-factor", methods=["GET", "POST"])
 def two_factor_login():
     if current_user.is_authenticated:
@@ -188,12 +254,38 @@ def complete_default_admin_setup():
     )
 
 
+@auth_bp.route("/force-password-change", methods=["GET", "POST"])
+@login_required
+def force_password_change():
+    if not AuthService.must_change_password(current_user):
+        return redirect(url_for("dashboard.index"))
+
+    form = PasswordResetForm()
+    if form.validate_on_submit():
+        try:
+            AuthService.complete_forced_password_change(
+                current_user,
+                password=form.password.data,
+                actor_id=current_user.id,
+            )
+            AuthService.deactivate_all_user_sessions(
+                current_user,
+                exclude_session_token=session.get("nova_session_token"),
+            )
+            flash("Password changed successfully.", "success")
+            return redirect(url_for("dashboard.index"))
+        except ValueError as exc:
+            flash(str(exc), "error")
+
+    return render_template("auth/force_password_change.html", form=form)
+
+
 @auth_bp.route("/logout", methods=["POST"])
 @login_required
 def logout():
     AuthService.deactivate_user_session(session.get("nova_session_token"))
     logout_user()
-    session.clear()
+    clear_novadrive_session_state(session)
     flash("You have been signed out.", "success")
     return redirect(url_for("auth.login"))
 
@@ -368,6 +460,17 @@ def _send_verification_email(user: User) -> None:
     AuthService.note_verification_email_sent(user)
 
 
+def _send_password_reset_email(user: User) -> None:
+    token = VerificationService.generate_password_reset_token(user, current_app.secret_key)
+    reset_url = external_url("auth.reset_password", token=token)
+    VerificationService.send_password_reset_email(
+        user=user,
+        reset_url=reset_url,
+        config=current_app.config,
+    )
+    AuthService.note_password_reset_email_sent(user)
+
+
 def _complete_login(user: User, *, remember: bool, next_target: str | None):
     login_user(user, remember=remember)
     session["nova_session_token"] = secrets.token_urlsafe(32)
@@ -386,6 +489,9 @@ def _complete_login(user: User, *, remember: bool, next_target: str | None):
             "error",
         )
         return redirect(url_for("auth.complete_default_admin_setup"))
+    if AuthService.must_change_password(user):
+        flash("An administrator requires this account to set a new password before continuing.", "error")
+        return redirect(url_for("auth.force_password_change"))
     flash("Welcome back to NovaDrive.", "success")
     return redirect(next_target or url_for("dashboard.index"))
 
@@ -415,3 +521,20 @@ def _get_pending_two_factor_user() -> User | None:
 
 def _security_redirect():
     return redirect(url_for("dashboard.index", _anchor="security-panel"))
+
+
+def _load_password_reset_user(token: str) -> User:
+    payload = VerificationService.verify_password_reset_token(
+        token,
+        current_app.secret_key,
+        current_app.config["PASSWORD_RESET_MAX_AGE_SECONDS"],
+    )
+    user = db.session.get(User, int(payload["user_id"]))
+    if not user:
+        raise VerificationTokenError("That password reset link is invalid.")
+    if user.email.lower() != str(payload["email"]).lower():
+        raise VerificationTokenError("That password reset link is invalid.")
+    fingerprint = str(payload.get("fingerprint") or "")
+    if fingerprint != VerificationService.password_reset_fingerprint(user):
+        raise VerificationTokenError("That password reset link is no longer valid.")
+    return user

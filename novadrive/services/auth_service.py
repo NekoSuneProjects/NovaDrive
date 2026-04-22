@@ -98,6 +98,10 @@ class AuthService:
         return user
 
     @staticmethod
+    def must_change_password(user: User) -> bool:
+        return bool(user.must_change_password)
+
+    @staticmethod
     def can_use_password_login(user: User, config) -> bool:
         if not config["EMAIL_VERIFICATION_REQUIRED"]:
             return True
@@ -242,6 +246,54 @@ class AuthService:
             return
         session.is_active = False
         db.session.commit()
+
+    @staticmethod
+    def deactivate_all_user_sessions(
+        user: User,
+        *,
+        exclude_session_token: str | None = None,
+    ) -> int:
+        sessions = (
+            UserSession.query.filter_by(user_id=user.id, is_active=True)
+            .order_by(UserSession.created_at.desc())
+            .all()
+        )
+        if not sessions:
+            return 0
+
+        excluded_hash = (
+            hashlib.sha256(exclude_session_token.encode("utf-8")).hexdigest()
+            if exclude_session_token
+            else None
+        )
+        changed = 0
+        for session in sessions:
+            if excluded_hash and session.session_token_hash == excluded_hash:
+                continue
+            session.is_active = False
+            changed += 1
+        if changed:
+            db.session.commit()
+        return changed
+
+    @staticmethod
+    def is_user_session_active(user: User, session_token: str | None) -> bool:
+        candidate = (session_token or "").strip()
+        if not candidate:
+            return False
+        token_hash = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+        stored_session = UserSession.query.filter_by(
+            user_id=user.id,
+            session_token_hash=token_hash,
+            is_active=True,
+        ).first()
+        if not stored_session:
+            return False
+        if stored_session.expires_at and stored_session.expires_at <= utcnow():
+            stored_session.is_active = False
+            db.session.commit()
+            return False
+        return True
 
     @staticmethod
     def get_root_folder(user: User) -> Folder:
@@ -498,6 +550,18 @@ class AuthService:
         )
 
     @staticmethod
+    def note_password_reset_email_sent(user: User) -> None:
+        user.password_reset_sent_at = utcnow()
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.password_reset_email.sent",
+            target_type="user",
+            target_id=user.id,
+            user_id=user.id,
+        )
+
+    @staticmethod
     def update_role(user: User, role: str, actor_id: int | None = None) -> User:
         role_value = AuthService.normalize_role(role)
 
@@ -526,6 +590,7 @@ class AuthService:
         role: str | None = None,
         email_verified: bool | None = None,
         storage_quota_bytes: int | None = None,
+        must_change_password: bool | None = None,
         actor_id: int | None = None,
     ) -> User:
         updates: dict[str, object] = {}
@@ -575,6 +640,12 @@ class AuthService:
             user.set_password(normalized_password)
             updates["password_reset"] = True
 
+        if must_change_password is not None:
+            required = bool(must_change_password)
+            if user.must_change_password != required:
+                user.must_change_password = required
+                updates["must_change_password"] = required
+
         if email_verified is not None:
             if email_verified and not user.is_email_verified:
                 user.email_verified_at = utcnow()
@@ -586,6 +657,9 @@ class AuthService:
 
         db.session.commit()
 
+        if updates.get("password_reset") and actor_id is not None and actor_id != user.id:
+            AuthService.deactivate_all_user_sessions(user)
+
         if updates:
             ActivityService.log(
                 action="user.profile.updated",
@@ -594,6 +668,42 @@ class AuthService:
                 user_id=actor_id,
                 metadata=updates,
             )
+        return user
+
+    @staticmethod
+    def complete_password_recovery(user: User, *, password: str, actor_id: int | None = None) -> User:
+        normalized_password = (password or "").strip()
+        if not normalized_password:
+            raise ValueError("Password cannot be empty.")
+
+        user.set_password(normalized_password)
+        user.must_change_password = False
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.password.recovered",
+            target_type="user",
+            target_id=user.id,
+            user_id=actor_id or user.id,
+        )
+        return user
+
+    @staticmethod
+    def complete_forced_password_change(user: User, *, password: str, actor_id: int | None = None) -> User:
+        normalized_password = (password or "").strip()
+        if not normalized_password:
+            raise ValueError("Password cannot be empty.")
+
+        user.set_password(normalized_password)
+        user.must_change_password = False
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.password.force_change.completed",
+            target_type="user",
+            target_id=user.id,
+            user_id=actor_id or user.id,
+        )
         return user
 
     @staticmethod

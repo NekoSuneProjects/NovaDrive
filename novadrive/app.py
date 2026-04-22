@@ -5,8 +5,8 @@ from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
-from flask_login import current_user
+from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
+from flask_login import current_user, logout_user
 from sqlalchemy import inspect, text
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -19,6 +19,7 @@ from novadrive.services.storage_factory import (
     get_storage_backend,
     storage_backend_label,
 )
+from novadrive.utils.session_state import clear_novadrive_session_state
 from novadrive.utils.urls import external_url
 from novadrive.utils.logging import configure_logging
 
@@ -129,10 +130,16 @@ def _ensure_runtime_schema(app: Flask) -> None:
             statements.append('ALTER TABLE "user" ADD COLUMN api_key_last4 VARCHAR(4)')
         if "api_key_created_at" not in user_columns:
             statements.append('ALTER TABLE "user" ADD COLUMN api_key_created_at TIMESTAMP')
+        if "password_changed_at" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN password_changed_at TIMESTAMP')
+        if "must_change_password" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN must_change_password BOOLEAN DEFAULT 0')
         if "email_verified_at" not in user_columns:
             statements.append('ALTER TABLE "user" ADD COLUMN email_verified_at TIMESTAMP')
         if "email_verification_sent_at" not in user_columns:
             statements.append('ALTER TABLE "user" ADD COLUMN email_verification_sent_at TIMESTAMP')
+        if "password_reset_sent_at" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN password_reset_sent_at TIMESTAMP')
         if "two_factor_secret" not in user_columns:
             statements.append('ALTER TABLE "user" ADD COLUMN two_factor_secret VARCHAR(64)')
         if "two_factor_pending_secret" not in user_columns:
@@ -175,6 +182,20 @@ def _ensure_runtime_schema(app: Flask) -> None:
                     "admin_default": app.config["DEFAULT_ADMIN_STORAGE_QUOTA_BYTES"],
                     "user_default": app.config["DEFAULT_USER_STORAGE_QUOTA_BYTES"],
                 },
+            )
+            connection.execute(
+                text(
+                    'UPDATE "user" '
+                    "SET must_change_password = 0 "
+                    "WHERE must_change_password IS NULL"
+                )
+            )
+            connection.execute(
+                text(
+                    'UPDATE "user" '
+                    "SET password_changed_at = COALESCE(updated_at, created_at) "
+                    "WHERE password_changed_at IS NULL"
+                )
             )
 
 
@@ -239,6 +260,18 @@ def _register_template_helpers(app: Flask) -> None:
 
 def _register_request_guards(app: Flask) -> None:
     @app.before_request
+    def enforce_active_user_session():
+        if not current_user.is_authenticated:
+            return None
+        if AuthService.is_user_session_active(current_user, session.get("nova_session_token")):
+            return None
+
+        logout_user()
+        clear_novadrive_session_state(session)
+        flash("Your session is no longer active. Please sign in again.", "error")
+        return redirect(url_for("auth.login"))
+
+    @app.before_request
     def enforce_default_admin_rotation():
         if not current_user.is_authenticated:
             return None
@@ -253,6 +286,24 @@ def _register_request_guards(app: Flask) -> None:
         if request.endpoint in allowed_endpoints or request.endpoint is None:
             return None
         return redirect(url_for("auth.complete_default_admin_setup"))
+
+    @app.before_request
+    def enforce_password_change():
+        if not current_user.is_authenticated:
+            return None
+        if AuthService.must_change_default_admin_credentials(current_user):
+            return None
+        if not AuthService.must_change_password(current_user):
+            return None
+
+        allowed_endpoints = {
+            "auth.force_password_change",
+            "auth.logout",
+            "static",
+        }
+        if request.endpoint in allowed_endpoints or request.endpoint is None:
+            return None
+        return redirect(url_for("auth.force_password_change"))
 
 
 def _register_error_handlers(app: Flask) -> None:

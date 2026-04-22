@@ -9,7 +9,7 @@ from sqlalchemy import func
 from novadrive.extensions import db
 from novadrive.models import ActivityLog, File, Folder, SharedDrive, User, UserSession
 from novadrive.services.auth_service import AuthService
-from novadrive.services.email_service import EmailService
+from novadrive.services.email_service import EmailDeliveryError, EmailService
 from novadrive.services.file_service import AccessError, FileService
 from novadrive.services.storage_base import StorageBackendError
 from novadrive.services.storage_factory import (
@@ -17,7 +17,9 @@ from novadrive.services.storage_factory import (
     get_storage_backend,
     storage_backend_label,
 )
+from novadrive.services.verification_service import VerificationService
 from novadrive.utils.decorators import admin_required
+from novadrive.utils.urls import external_url
 from novadrive.utils.validators import ValidationError
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
@@ -234,10 +236,39 @@ def update_user_profile(user_id: int):
             role=request.form.get("role"),
             email_verified=request.form.get("email_verified") == "on",
             storage_quota_bytes=quota_bytes,
+            must_change_password=request.form.get("must_change_password") == "on",
             actor_id=current_user.id,
         )
         flash("User profile updated.", "success")
     except (InvalidOperation, ValueError) as exc:
+        flash(str(exc), "error")
+    return redirect(url_for("admin.user_details", user_id=user_id))
+
+
+@admin_bp.route("/users/<int:user_id>/send-password-reset", methods=["POST"])
+@login_required
+@admin_required
+def send_user_password_reset(user_id: int):
+    target_user = db.session.get(User, user_id)
+    if not target_user:
+        flash("User not found.", "error")
+        return redirect(url_for("admin.index"))
+
+    if not EmailService.is_configured(current_app.config):
+        flash("SMTP is not configured for password recovery emails.", "error")
+        return redirect(url_for("admin.user_details", user_id=user_id))
+
+    try:
+        token = VerificationService.generate_password_reset_token(target_user, current_app.secret_key)
+        reset_url = external_url("auth.reset_password", token=token)
+        VerificationService.send_password_reset_email(
+            user=target_user,
+            reset_url=reset_url,
+            config=current_app.config,
+        )
+        AuthService.note_password_reset_email_sent(target_user)
+        flash("Password recovery email sent.", "success")
+    except (EmailDeliveryError, ValueError) as exc:
         flash(str(exc), "error")
     return redirect(url_for("admin.user_details", user_id=user_id))
 

@@ -74,6 +74,24 @@ class TwoFactorDisableForm(FlaskForm):
     )
 
 
+class ForgotPasswordForm(FlaskForm):
+    email = StringField(
+        "Email",
+        validators=[DataRequired(), Email(), Length(max=255)],
+    )
+
+
+class PasswordResetForm(FlaskForm):
+    password = PasswordField(
+        "New password",
+        validators=[DataRequired(), Length(min=8, max=128)],
+    )
+    confirm_password = PasswordField(
+        "Confirm new password",
+        validators=[DataRequired(), EqualTo("password")],
+    )
+
+
 class ShareLinkForm(FlaskForm):
     expires_at = DateTimeLocalField("Expires at", validators=[Optional()], format="%Y-%m-%dT%H:%M")
 
