@@ -364,7 +364,9 @@ Recommended bot permissions:
 | `SECRET_KEY` | Flask session signing secret | `super-long-random-secret` |
 | `DATABASE_URL` | SQLAlchemy database URL | `sqlite:///instance/novadrive.db` |
 | `APP_EXTERNAL_URL` | Public base URL used in verification emails, ShareX configs, and generated share links. If no scheme is provided, NovaDrive infers `https://` for domains and `http://` for IPs or localhost. | `drive.example.com` |
-| `MAX_UPLOAD_SIZE_BYTES` | Max allowed file size through Flask | `536870912` |
+| `CLOUDFLARE_TUNNEL_COMPAT` | Clamp uploads to a Cloudflare-compatible request size before Cloudflare returns `413 Payload Too Large` | `true` |
+| `CLOUDFLARE_TUNNEL_PLAN` | Cloudflare upload plan preset: `free`, `pro`, `business`, or `enterprise`. NovaDrive applies a built-in safe request cap for the selected plan. | `free` |
+| `MAX_UPLOAD_SIZE_BYTES` | Max allowed upload request size through Flask before any optional Cloudflare compatibility clamp is applied | `536870912` |
 | `SPOOL_MAX_MEMORY_BYTES` | Max in-memory temp spool before disk spill | `8388608` |
 | `TEXT_PREVIEW_MAX_BYTES` | Max text bytes rendered inline on preview pages | `1048576` |
 | `DEFAULT_USER_STORAGE_QUOTA_BYTES` | Default storage cap applied to new non-admin users | `10737418240` |
@@ -441,6 +443,7 @@ Important notes:
 - If the app is behind HTTPS or a reverse proxy, set `APP_EXTERNAL_URL` before downloading the `.sxcu` file.
 - If you change the public domain, protocol, or proxy config later, download a fresh `.sxcu` and re-import it into ShareX.
 - If ShareX reports HTML or `405 Method Not Allowed` instead of JSON, it is usually still hitting an old non-HTTPS uploader URL and getting redirected before the upload request reaches NovaDrive correctly.
+- If you deploy behind Cloudflare Tunnel, enable `CLOUDFLARE_TUNNEL_COMPAT=true` so NovaDrive caps uploads before Cloudflare rejects the request body.
 
 ## WebDAV quick start
 
@@ -661,6 +664,25 @@ Check:
 - you downloaded a fresh `.sxcu` after changing domain or proxy settings
 - ShareX is using `POST` for the request
 - your reverse proxy forwards the original host and scheme so NovaDrive can generate correct public URLs
+
+### Cloudflare returns `413 Payload Too Large`
+
+Cloudflare applies a maximum HTTP request body size at the edge. If NovaDrive advertises a larger upload than your Cloudflare plan allows, Cloudflare rejects the request before Flask can process it.
+
+For Cloudflare Tunnel or proxied HTTPS deployments, set:
+
+```text
+CLOUDFLARE_TUNNEL_COMPAT=true
+CLOUDFLARE_TUNNEL_PLAN=free
+```
+
+NovaDrive uses built-in safe caps for each plan so you do not need a separate margin setting:
+
+- `free` and `pro`: `99,000,000` bytes
+- `business`: `199,000,000` bytes
+- `enterprise`: `499,000,000` bytes
+
+Then restart NovaDrive. The app will clamp `MAX_UPLOAD_SIZE_BYTES` to the safe cap for that plan and the dashboard will show the effective upload limit before users submit files.
 
 ### Downloads fail or rebuilt hashes do not match
 

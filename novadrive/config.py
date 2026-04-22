@@ -19,6 +19,13 @@ def _as_int(value: str | None, default: int) -> int:
         return default
 
 
+def _as_choice(value: str | None, allowed: set[str], default: str) -> str:
+    candidate = (value or "").strip().lower()
+    if candidate in allowed:
+        return candidate
+    return default
+
+
 def _resolve_database_uri(base_dir: Path, instance_dir: Path) -> str:
     configured_value = (os.getenv("DATABASE_URL") or "").strip()
     if not configured_value:
@@ -77,6 +84,29 @@ def _normalize_external_url(value: str | None) -> str:
     ).rstrip("/")
 
 
+def _cloudflare_safe_upload_limit_bytes(plan: str) -> int:
+    limits = {
+        "free": 99_000_000,
+        "pro": 99_000_000,
+        "business": 199_000_000,
+        "enterprise": 499_000_000,
+    }
+    return limits.get(plan, limits["free"])
+
+
+def _resolve_max_upload_size(
+    configured_limit: int,
+    *,
+    cloudflare_tunnel_compat: bool,
+    cloudflare_safe_limit: int,
+) -> int:
+    effective_limit = max(int(configured_limit), 1)
+    if not cloudflare_tunnel_compat:
+        return effective_limit
+
+    return min(effective_limit, max(int(cloudflare_safe_limit), 1))
+
+
 class Config:
     APP_NAME = "NovaDrive"
 
@@ -88,7 +118,24 @@ class Config:
     SQLALCHEMY_DATABASE_URI = _resolve_database_uri(BASE_DIR, INSTANCE_DIR)
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
-    MAX_UPLOAD_SIZE_BYTES = _as_int(os.getenv("MAX_UPLOAD_SIZE_BYTES"), 536_870_912)
+    CLOUDFLARE_TUNNEL_COMPAT = _as_bool(os.getenv("CLOUDFLARE_TUNNEL_COMPAT"), False)
+    CLOUDFLARE_TUNNEL_PLAN = _as_choice(
+        os.getenv("CLOUDFLARE_TUNNEL_PLAN"),
+        {"free", "pro", "business", "enterprise"},
+        "free",
+    )
+    CLOUDFLARE_TUNNEL_PLAN_SAFE_LIMIT_BYTES = _cloudflare_safe_upload_limit_bytes(
+        CLOUDFLARE_TUNNEL_PLAN
+    )
+    CONFIGURED_MAX_UPLOAD_SIZE_BYTES = _as_int(
+        os.getenv("MAX_UPLOAD_SIZE_BYTES"),
+        536_870_912,
+    )
+    MAX_UPLOAD_SIZE_BYTES = _resolve_max_upload_size(
+        CONFIGURED_MAX_UPLOAD_SIZE_BYTES,
+        cloudflare_tunnel_compat=CLOUDFLARE_TUNNEL_COMPAT,
+        cloudflare_safe_limit=CLOUDFLARE_TUNNEL_PLAN_SAFE_LIMIT_BYTES,
+    )
     MAX_CONTENT_LENGTH = MAX_UPLOAD_SIZE_BYTES
     SPOOL_MAX_MEMORY_BYTES = _as_int(os.getenv("SPOOL_MAX_MEMORY_BYTES"), 8_388_608)
     TEXT_PREVIEW_MAX_BYTES = _as_int(os.getenv("TEXT_PREVIEW_MAX_BYTES"), 1_048_576)

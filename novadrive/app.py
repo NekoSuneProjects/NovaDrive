@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user
 from sqlalchemy import inspect, text
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -227,13 +227,44 @@ def _register_request_guards(app: Flask) -> None:
 
 
 def _register_error_handlers(app: Flask) -> None:
+    def format_bytes(value: int | None) -> str:
+        if value is None:
+            return "-"
+        units = ["B", "KB", "MB", "GB", "TB"]
+        size = float(value)
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                if unit == "B":
+                    return f"{int(size)} {unit}"
+                return f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{value} B"
+
+    def wants_json_error() -> bool:
+        if request.blueprint == "api":
+            return True
+        if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+            return True
+        accepted = request.accept_mimetypes
+        return accepted.accept_json and not accepted.accept_html
+
     @app.errorhandler(404)
     def not_found(error):
         return render_template("errors/404.html"), 404
 
     @app.errorhandler(413)
     def request_too_large(error):
-        flash("That upload exceeds the configured maximum file size.", "error")
+        limit_label = format_bytes(app.config["MAX_UPLOAD_SIZE_BYTES"])
+        message = f"This file cannot be uploaded because it exceeds the maximum upload size of {limit_label}."
+        if app.config.get("CLOUDFLARE_TUNNEL_COMPAT"):
+            plan = str(app.config["CLOUDFLARE_TUNNEL_PLAN"]).capitalize()
+            message = (
+                f"This file cannot be uploaded because this NovaDrive instance is running through "
+                f"Cloudflare {plan} tier compatibility mode. Maximum upload size: {limit_label}."
+            )
+        if wants_json_error():
+            return jsonify({"success": False, "error": message}), 413
+        flash(message, "error")
         if current_user.is_authenticated:
             return redirect(url_for("dashboard.index"))
         return redirect(url_for("auth.login"))

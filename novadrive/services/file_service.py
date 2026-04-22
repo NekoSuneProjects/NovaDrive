@@ -623,8 +623,15 @@ class FileService:
             return
 
         remaining_bytes = max(quota_bytes - current_usage, 0)
+        if remaining_bytes <= 0:
+            raise ValidationError(
+                "Your storage is full. "
+                f"You have used all available storage ({FileService._format_bytes(quota_bytes)}). "
+                "Delete files or ask an admin to increase your storage quota."
+            )
+
         raise ValidationError(
-            "Storage quota exceeded. "
+            "This upload cannot be completed because it would exceed your storage quota. "
             f"Remaining space: {FileService._format_bytes(remaining_bytes)} of "
             f"{FileService._format_bytes(quota_bytes)}."
         )
