@@ -5,6 +5,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY tailwind.config.js ./
 COPY novadrive/static/src ./novadrive/static/src
+COPY novadrive/static/js ./novadrive/static/js
+COPY novadrive/templates ./novadrive/templates
 RUN npm ci
 RUN npm run build:css
 

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Register · NovaDrive{% endblock %}
+{% block title %}Register - NovaDrive{% endblock %}
 {% block content %}
 <div class="mx-auto grid min-h-[calc(100vh-3rem)] max-w-6xl items-center gap-8 lg:grid-cols-[0.92fr,1.08fr]">
   <section class="rounded-[32px] border border-white/10 bg-black/40 p-8 shadow-[0_40px_120px_rgba(0,0,0,0.4)] backdrop-blur-2xl sm:p-10">
@@ -52,7 +52,7 @@
       <div class="mt-10 space-y-4">
         <div class="rounded-3xl border border-white/10 bg-black/20 p-5">
           <p class="text-sm font-semibold text-white">Chunk-aware uploads</p>
-          <p class="mt-2 text-sm leading-7 text-slate-400">Files are buffered temporarily, split safely, uploaded through the Discord bot bridge, and indexed in SQLite.</p>
+          <p class="mt-2 text-sm leading-7 text-slate-400">Files are buffered temporarily, split safely, uploaded through the configured storage backend, and indexed in SQLite.</p>
         </div>
         <div class="rounded-3xl border border-white/10 bg-black/20 p-5">
           <p class="text-sm font-semibold text-white">Folder and share flows</p>
