@@ -8,12 +8,16 @@ from flask import current_app, has_app_context
 from sqlalchemy import func, or_
 
 from novadrive.extensions import db
-from novadrive.models import Folder, User, UserSession, utcnow
+from novadrive.models import ActivityLog, Folder, User, UserSession, utcnow
 from novadrive.services.activity_service import ActivityService
 
 
 class AuthService:
     API_KEY_PREFIX = "ndv_"
+    DEFAULT_ADMIN_MARKER_ACTION = "system.default_admin.provisioned"
+    DEFAULT_ADMIN_USERNAME = "admin"
+    DEFAULT_ADMIN_EMAIL = "admin@example.com"
+    DEFAULT_ADMIN_PASSWORD = "changeme123"
 
     @staticmethod
     def normalize_role(role: str | None) -> str:
@@ -42,7 +46,7 @@ class AuthService:
         role = (
             AuthService.normalize_role(force_role)
             if force_role is not None
-            else ("admin" if User.query.count() == 0 else "user")
+            else AuthService.default_role_for_new_user()
         )
         user = User(
             username=normalized_username,
@@ -190,7 +194,10 @@ class AuthService:
         if not candidate:
             return None
         digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
-        return User.query.filter_by(api_key_hash=digest).first()
+        user = User.query.filter_by(api_key_hash=digest).first()
+        if user and AuthService.must_change_default_admin_credentials(user):
+            return None
+        return user
 
     @staticmethod
     def mark_email_verified(user: User) -> User:
@@ -207,6 +214,99 @@ class AuthService:
             user_id=user.id,
         )
         return user
+
+    @staticmethod
+    def default_role_for_new_user() -> str:
+        if User.query.count() == 0 and not AuthService.has_default_admin_bootstrap_marker():
+            return "admin"
+        return "user"
+
+    @staticmethod
+    def has_default_admin_bootstrap_marker() -> bool:
+        return (
+            ActivityLog.query.filter_by(action=AuthService.DEFAULT_ADMIN_MARKER_ACTION).first()
+            is not None
+        )
+
+    @staticmethod
+    def ensure_default_admin(config=None) -> User | None:
+        if User.query.count() > 0 or AuthService.has_default_admin_bootstrap_marker():
+            return None
+
+        user = AuthService.create_user(
+            username=AuthService.DEFAULT_ADMIN_USERNAME,
+            email=AuthService.DEFAULT_ADMIN_EMAIL,
+            password=AuthService.DEFAULT_ADMIN_PASSWORD,
+            force_role="admin",
+            email_verified=True,
+            storage_quota_bytes=AuthService.default_storage_quota_bytes("admin", config=config),
+        )
+        ActivityService.log(
+            action=AuthService.DEFAULT_ADMIN_MARKER_ACTION,
+            target_type="user",
+            target_id=user.id,
+            user_id=user.id,
+            metadata={
+                "username": user.username,
+                "email": user.email,
+            },
+        )
+        return user
+
+    @staticmethod
+    def must_change_default_admin_credentials(user: User) -> bool:
+        if not user.is_admin:
+            return False
+        if user.username.strip().lower() == AuthService.DEFAULT_ADMIN_USERNAME.lower():
+            return True
+        if user.email.lower() == AuthService.DEFAULT_ADMIN_EMAIL.lower():
+            return True
+        return user.check_password(AuthService.DEFAULT_ADMIN_PASSWORD)
+
+    @staticmethod
+    def validate_default_admin_replacement(
+        *,
+        username: str,
+        email: str,
+        password: str,
+    ) -> None:
+        normalized_username = username.strip().lower()
+        normalized_email = email.strip().lower()
+        if normalized_username == AuthService.DEFAULT_ADMIN_USERNAME.lower():
+            raise ValueError("Change the default admin username before continuing.")
+        if normalized_email == AuthService.DEFAULT_ADMIN_EMAIL.lower():
+            raise ValueError("Change the default admin email before continuing.")
+        if password == AuthService.DEFAULT_ADMIN_PASSWORD:
+            raise ValueError("Change the default admin password before continuing.")
+
+    @staticmethod
+    def replace_default_admin_credentials(
+        user: User,
+        *,
+        username: str,
+        email: str,
+        password: str,
+        actor_id: int | None = None,
+    ) -> User:
+        AuthService.validate_default_admin_replacement(
+            username=username,
+            email=email,
+            password=password,
+        )
+        updated_user = AuthService.update_user_profile(
+            user,
+            username=username,
+            email=email,
+            password=password,
+            actor_id=actor_id,
+        )
+        ActivityService.log(
+            action="user.default_admin_credentials.replaced",
+            target_type="user",
+            target_id=updated_user.id,
+            user_id=actor_id or updated_user.id,
+        )
+        return updated_user
 
     @staticmethod
     def note_verification_email_sent(user: User) -> None:

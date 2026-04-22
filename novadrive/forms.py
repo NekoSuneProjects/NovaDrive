@@ -37,6 +37,25 @@ class LoginForm(FlaskForm):
     remember = BooleanField("Remember me")
 
 
+class DefaultAdminSetupForm(FlaskForm):
+    username = StringField(
+        "Username",
+        validators=[DataRequired(), Length(min=3, max=32)],
+    )
+    email = StringField(
+        "Email",
+        validators=[DataRequired(), Email(), Length(max=255)],
+    )
+    password = PasswordField(
+        "New password",
+        validators=[DataRequired(), Length(min=8, max=128)],
+    )
+    confirm_password = PasswordField(
+        "Confirm new password",
+        validators=[DataRequired(), EqualTo("password")],
+    )
+
+
 class ShareLinkForm(FlaskForm):
     expires_at = DateTimeLocalField("Expires at", validators=[Optional()], format="%Y-%m-%dT%H:%M")
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 from dotenv import load_dotenv
-from flask import Flask, flash, redirect, render_template, url_for
+from flask import Flask, flash, redirect, render_template, request, url_for
 from flask_login import current_user
 from sqlalchemy import inspect, text
 
@@ -35,8 +35,10 @@ def create_app(config_object: type[Config] | None = None) -> Flask:
     configure_logging(app.config["LOG_LEVEL"])
     _init_extensions(app)
     _ensure_runtime_schema(app)
+    _ensure_default_admin(app)
     _register_blueprints(app)
     _register_routes(app)
+    _register_request_guards(app)
     _register_template_helpers(app)
     _register_error_handlers(app)
     _register_cli(app)
@@ -149,6 +151,11 @@ def _ensure_runtime_schema(app: Flask) -> None:
             )
 
 
+def _ensure_default_admin(app: Flask) -> None:
+    with app.app_context():
+        AuthService.ensure_default_admin(config=app.config)
+
+
 def _register_template_helpers(app: Flask) -> None:
     @app.template_filter("filesize")
     def filesize_filter(value: int | None) -> str:
@@ -189,7 +196,30 @@ def _register_template_helpers(app: Flask) -> None:
             "configured_storage_backend_label": storage_backend_label(
                 configured_storage_backend_name(app.config)
             ),
+            "requires_default_admin_change": (
+                AuthService.must_change_default_admin_credentials(current_user)
+                if current_user.is_authenticated
+                else False
+            ),
         }
+
+
+def _register_request_guards(app: Flask) -> None:
+    @app.before_request
+    def enforce_default_admin_rotation():
+        if not current_user.is_authenticated:
+            return None
+        if not AuthService.must_change_default_admin_credentials(current_user):
+            return None
+
+        allowed_endpoints = {
+            "auth.complete_default_admin_setup",
+            "auth.logout",
+            "static",
+        }
+        if request.endpoint in allowed_endpoints or request.endpoint is None:
+            return None
+        return redirect(url_for("auth.complete_default_admin_setup"))
 
 
 def _register_error_handlers(app: Flask) -> None:

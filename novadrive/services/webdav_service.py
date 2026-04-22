@@ -56,6 +56,8 @@ class WebDavService:
             return None
         if not AuthService.can_use_password_login(user, current_app.config):
             return None
+        if AuthService.must_change_default_admin_credentials(user):
+            return None
         return user
 
     @staticmethod

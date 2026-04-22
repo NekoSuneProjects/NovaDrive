@@ -120,7 +120,7 @@ README.md                 You are here
 - User login/logout
 - Password hashing
 - Session cookie auth
-- First registered user becomes admin
+- One-time bootstrap admin account is created automatically on a fresh database
 - Optional email verification before password login and WebDAV access
 - Basic `admin` and `user` role model with admin role reassignment from the admin console
 - Default per-user storage caps with admin-adjustable per-account quota overrides
@@ -281,7 +281,18 @@ Visit:
 http://127.0.0.1:5000
 ```
 
-Register the first account. That user becomes the initial admin automatically.
+On a fresh database, NovaDrive creates a one-time bootstrap admin account automatically:
+
+- Email: `admin@example.com`
+- Password: `changeme123`
+
+After signing in with that default admin account, NovaDrive forces you to change all three of these before you can use the dashboard normally:
+
+- username
+- email
+- password
+
+The default admin is only bootstrapped once per database and is not recreated automatically later.
 
 If `EMAIL_VERIFICATION_REQUIRED=true`, new accounts must confirm their email before normal login and WebDAV access are enabled.
 

@@ -9,7 +9,7 @@ from flask_login import current_user, login_required, login_user, logout_user
 
 from novadrive.extensions import db
 from novadrive.models import User, utcnow
-from novadrive.forms import LoginForm, RegistrationForm
+from novadrive.forms import DefaultAdminSetupForm, LoginForm, RegistrationForm
 from novadrive.services.auth_service import AuthService
 from novadrive.services.email_service import EmailDeliveryError
 from novadrive.services.verification_service import VerificationService, VerificationTokenError
@@ -89,12 +89,50 @@ def login():
                 ip_address=request.headers.get("X-Forwarded-For", request.remote_addr),
                 lifetime_hours=current_app.config["PERMANENT_SESSION_LIFETIME_HOURS"],
             )
+            if AuthService.must_change_default_admin_credentials(user):
+                flash(
+                    "Default admin credentials are still active. Change the username, email, and password now.",
+                    "error",
+                )
+                return redirect(url_for("auth.complete_default_admin_setup"))
             flash("Welcome back to NovaDrive.", "success")
             return redirect(request.args.get("next") or url_for("dashboard.index"))
     return render_template(
         "auth/login.html",
         form=form,
         pending_verification_email=pending_verification_email,
+    )
+
+
+@auth_bp.route("/complete-default-admin", methods=["GET", "POST"])
+@login_required
+def complete_default_admin_setup():
+    if not AuthService.must_change_default_admin_credentials(current_user):
+        return redirect(url_for("dashboard.index"))
+
+    form = DefaultAdminSetupForm(
+        username=current_user.username,
+        email=current_user.email,
+    )
+    if form.validate_on_submit():
+        try:
+            AuthService.replace_default_admin_credentials(
+                current_user,
+                username=form.username.data,
+                email=form.email.data,
+                password=form.password.data,
+                actor_id=current_user.id,
+            )
+            flash("Default admin credentials replaced successfully.", "success")
+            return redirect(url_for("dashboard.index"))
+        except ValueError as exc:
+            flash(str(exc), "error")
+
+    return render_template(
+        "auth/default_admin_setup.html",
+        form=form,
+        default_admin_username=AuthService.DEFAULT_ADMIN_USERNAME,
+        default_admin_email=AuthService.DEFAULT_ADMIN_EMAIL,
     )
 
 
