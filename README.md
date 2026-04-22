@@ -288,7 +288,13 @@ If `STORAGE_BACKEND=s3`, you can skip this step.
 
 ### 8. Open NovaDrive
 
-Visit:
+For a public or reverse-proxied deployment, open:
+
+```text
+https://your-host
+```
+
+For local development without TLS, open:
 
 ```text
 http://127.0.0.1:5000
@@ -309,11 +315,17 @@ The default admin is only bootstrapped once per database and is not recreated au
 
 If `EMAIL_VERIFICATION_REQUIRED=true`, new accounts must confirm their email before normal login and WebDAV access are enabled.
 
-If NovaDrive sits behind nginx, Traefik, Caddy, Cloudflare, or another reverse proxy, set `APP_EXTERNAL_URL` to the exact public HTTPS origin, for example:
+If NovaDrive sits behind nginx, Traefik, Caddy, Cloudflare, or another reverse proxy, set `APP_EXTERNAL_URL` to the public host you want NovaDrive to generate:
 
 ```text
 APP_EXTERNAL_URL=https://drive.example.com
 ```
+
+You can also omit the scheme and let NovaDrive infer it:
+
+- `drive.example.com` becomes `https://drive.example.com`
+- `192.168.1.107:5000` becomes `http://192.168.1.107:5000`
+- `localhost:5000` becomes `http://localhost:5000`
 
 That value is used when NovaDrive generates:
 
@@ -351,7 +363,7 @@ Recommended bot permissions:
 | --- | --- | --- |
 | `SECRET_KEY` | Flask session signing secret | `super-long-random-secret` |
 | `DATABASE_URL` | SQLAlchemy database URL | `sqlite:///instance/novadrive.db` |
-| `APP_EXTERNAL_URL` | Public HTTPS URL used in verification emails, ShareX configs, and generated share links | `https://drive.example.com` |
+| `APP_EXTERNAL_URL` | Public base URL used in verification emails, ShareX configs, and generated share links. If no scheme is provided, NovaDrive infers `https://` for domains and `http://` for IPs or localhost. | `drive.example.com` |
 | `MAX_UPLOAD_SIZE_BYTES` | Max allowed file size through Flask | `536870912` |
 | `SPOOL_MAX_MEMORY_BYTES` | Max in-memory temp spool before disk spill | `8388608` |
 | `TEXT_PREVIEW_MAX_BYTES` | Max text bytes rendered inline on preview pages | `1048576` |
@@ -428,7 +440,7 @@ Important notes:
 - ShareX upload endpoints are `POST` only.
 - If the app is behind HTTPS or a reverse proxy, set `APP_EXTERNAL_URL` before downloading the `.sxcu` file.
 - If you change the public domain, protocol, or proxy config later, download a fresh `.sxcu` and re-import it into ShareX.
-- If ShareX reports HTML or `405 Method Not Allowed` instead of JSON, it is usually still hitting an old `http://` uploader URL and getting redirected before the upload request reaches NovaDrive correctly.
+- If ShareX reports HTML or `405 Method Not Allowed` instead of JSON, it is usually still hitting an old non-HTTPS uploader URL and getting redirected before the upload request reaches NovaDrive correctly.
 
 ## WebDAV quick start
 
@@ -645,7 +657,7 @@ Check:
 
 Check:
 
-- `APP_EXTERNAL_URL` is set to the public HTTPS URL, not the internal container or local HTTP URL
+- `APP_EXTERNAL_URL` is set to the correct public host, or left blank locally so Flask can derive it from the current request
 - you downloaded a fresh `.sxcu` after changing domain or proxy settings
 - ShareX is using `POST` for the request
 - your reverse proxy forwards the original host and scheme so NovaDrive can generate correct public URLs

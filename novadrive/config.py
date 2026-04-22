@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 
 def _as_bool(value: str | None, default: bool = False) -> bool:
@@ -39,12 +41,48 @@ def _resolve_database_uri(base_dir: Path, instance_dir: Path) -> str:
     return configured_value
 
 
+def _host_prefers_https(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+
+    normalized_host = hostname.strip().strip("[]").lower()
+    if not normalized_host or normalized_host == "localhost" or "." not in normalized_host:
+        return False
+
+    try:
+        ipaddress.ip_address(normalized_host)
+    except ValueError:
+        return True
+    return False
+
+
+def _normalize_external_url(value: str | None) -> str:
+    configured_value = (value or "").strip()
+    if not configured_value:
+        return ""
+
+    if "://" in configured_value:
+        return configured_value.rstrip("/")
+
+    inferred = urlsplit(f"//{configured_value}")
+    scheme = "https" if _host_prefers_https(inferred.hostname) else "http"
+    return urlunsplit(
+        (
+            scheme,
+            inferred.netloc,
+            inferred.path,
+            inferred.query,
+            inferred.fragment,
+        )
+    ).rstrip("/")
+
+
 class Config:
     APP_NAME = "NovaDrive"
 
     BASE_DIR = Path(__file__).resolve().parent.parent
     INSTANCE_DIR = BASE_DIR / "instance"
-    APP_EXTERNAL_URL = os.getenv("APP_EXTERNAL_URL", "").rstrip("/")
+    APP_EXTERNAL_URL = _normalize_external_url(os.getenv("APP_EXTERNAL_URL"))
 
     SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
     SQLALCHEMY_DATABASE_URI = _resolve_database_uri(BASE_DIR, INSTANCE_DIR)
