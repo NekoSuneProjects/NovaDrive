@@ -4,6 +4,7 @@ import hashlib
 import secrets
 from datetime import timedelta
 
+import pyotp
 from flask import current_app, has_app_context
 from sqlalchemy import func, or_
 
@@ -14,6 +15,7 @@ from novadrive.services.activity_service import ActivityService
 
 class AuthService:
     API_KEY_PREFIX = "ndv_"
+    WEBDAV_PASSWORD_PREFIX = "ndv_dav_"
     DEFAULT_ADMIN_MARKER_ACTION = "system.default_admin.provisioned"
     DEFAULT_ADMIN_USERNAME = "admin"
     DEFAULT_ADMIN_EMAIL = "admin@example.com"
@@ -81,13 +83,7 @@ class AuthService:
 
     @staticmethod
     def authenticate(login: str, password: str, *, record_login: bool = True) -> User | None:
-        identity = login.strip().lower()
-        user = User.query.filter(
-            or_(
-                func.lower(User.username) == identity,
-                func.lower(User.email) == identity,
-            )
-        ).first()
+        user = AuthService.find_by_login(login)
         if user and user.check_password(password):
             if record_login:
                 user.last_login_at = utcnow()
@@ -96,10 +92,125 @@ class AuthService:
         return None
 
     @staticmethod
+    def note_successful_login(user: User) -> User:
+        user.last_login_at = utcnow()
+        db.session.commit()
+        return user
+
+    @staticmethod
     def can_use_password_login(user: User, config) -> bool:
         if not config["EMAIL_VERIFICATION_REQUIRED"]:
             return True
         return user.is_email_verified
+
+    @staticmethod
+    def generate_two_factor_secret() -> str:
+        return pyotp.random_base32()
+
+    @staticmethod
+    def normalize_two_factor_code(code: str | None) -> str:
+        normalized = "".join(character for character in str(code or "") if character.isdigit())
+        if len(normalized) != 6:
+            raise ValueError("Enter the current 6-digit authentication code.")
+        return normalized
+
+    @staticmethod
+    def build_two_factor_uri(user: User, secret: str, issuer_name: str) -> str:
+        issuer = (issuer_name or "NovaDrive").strip() or "NovaDrive"
+        return pyotp.TOTP(secret).provisioning_uri(name=user.email, issuer_name=issuer)
+
+    @staticmethod
+    def verify_two_factor_code(secret: str | None, code: str | None) -> bool:
+        if not secret:
+            return False
+        try:
+            normalized_code = AuthService.normalize_two_factor_code(code)
+        except ValueError:
+            return False
+        return bool(pyotp.TOTP(secret).verify(normalized_code, valid_window=1))
+
+    @staticmethod
+    def begin_two_factor_setup(user: User, actor_id: int | None = None) -> User:
+        user.two_factor_pending_secret = AuthService.generate_two_factor_secret()
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.two_factor.setup_started",
+            target_type="user",
+            target_id=user.id,
+            user_id=actor_id or user.id,
+        )
+        return user
+
+    @staticmethod
+    def cancel_two_factor_setup(user: User, actor_id: int | None = None) -> User:
+        if not user.two_factor_pending_secret:
+            return user
+
+        user.two_factor_pending_secret = None
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.two_factor.setup_cancelled",
+            target_type="user",
+            target_id=user.id,
+            user_id=actor_id or user.id,
+        )
+        return user
+
+    @staticmethod
+    def confirm_two_factor_setup(
+        user: User,
+        code: str,
+        *,
+        actor_id: int | None = None,
+    ) -> User:
+        pending_secret = user.two_factor_pending_secret
+        if not pending_secret:
+            raise ValueError("Generate a two-factor secret before confirming setup.")
+        if not AuthService.verify_two_factor_code(pending_secret, code):
+            raise ValueError("That authentication code is invalid. Check the secret and try again.")
+
+        user.two_factor_secret = pending_secret
+        user.two_factor_pending_secret = None
+        user.two_factor_enabled_at = utcnow()
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.two_factor.enabled",
+            target_type="user",
+            target_id=user.id,
+            user_id=actor_id or user.id,
+        )
+        return user
+
+    @staticmethod
+    def disable_two_factor(
+        user: User,
+        *,
+        password: str,
+        code: str,
+        actor_id: int | None = None,
+    ) -> User:
+        if not user.is_two_factor_enabled:
+            raise ValueError("Two-factor authentication is not enabled on this account.")
+        if not user.check_password((password or "").strip()):
+            raise ValueError("The current password you entered is incorrect.")
+        if not AuthService.verify_two_factor_code(user.two_factor_secret, code):
+            raise ValueError("The authentication code is invalid.")
+
+        user.two_factor_secret = None
+        user.two_factor_pending_secret = None
+        user.two_factor_enabled_at = None
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.two_factor.disabled",
+            target_type="user",
+            target_id=user.id,
+            user_id=actor_id or user.id,
+        )
+        return user
 
     @staticmethod
     def ensure_user_session(
@@ -156,6 +267,18 @@ class AuthService:
         return User.query.filter(func.lower(User.email) == email.lower()).first()
 
     @staticmethod
+    def find_by_login(login: str) -> User | None:
+        identity = (login or "").strip().lower()
+        if not identity:
+            return None
+        return User.query.filter(
+            or_(
+                func.lower(User.username) == identity,
+                func.lower(User.email) == identity,
+            )
+        ).first()
+
+    @staticmethod
     def generate_api_key(user: User) -> str:
         raw_key = f"{AuthService.API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
         user.api_key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
@@ -193,6 +316,54 @@ class AuthService:
             target_id=user.id,
             user_id=user.id,
         )
+
+    @staticmethod
+    def generate_webdav_password(user: User) -> str:
+        raw_password = f"{AuthService.WEBDAV_PASSWORD_PREFIX}{secrets.token_urlsafe(24)}"
+        user.webdav_password_hash = hashlib.sha256(raw_password.encode("utf-8")).hexdigest()
+        user.webdav_password_last4 = raw_password[-4:]
+        user.webdav_password_created_at = utcnow()
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.webdav_password.generated",
+            target_type="user",
+            target_id=user.id,
+            user_id=user.id,
+        )
+        return raw_password
+
+    @staticmethod
+    def revoke_webdav_password(user: User) -> None:
+        if not user.has_webdav_password:
+            return
+
+        user.webdav_password_hash = None
+        user.webdav_password_last4 = None
+        user.webdav_password_created_at = None
+        db.session.commit()
+
+        ActivityService.log(
+            action="user.webdav_password.revoked",
+            target_type="user",
+            target_id=user.id,
+            user_id=user.id,
+        )
+
+    @staticmethod
+    def authenticate_webdav_password(login: str, password: str) -> User | None:
+        candidate = (password or "").strip()
+        if not candidate:
+            return None
+
+        user = AuthService.find_by_login(login)
+        if not user or not user.has_webdav_password:
+            return None
+
+        digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+        if user.webdav_password_hash != digest:
+            return None
+        return user
 
     @staticmethod
     def authenticate_api_key(api_key: str | None) -> User | None:

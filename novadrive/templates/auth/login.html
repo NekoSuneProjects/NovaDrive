@@ -68,10 +68,16 @@
       </div>
     {% endif %}
 
-    <p class="mt-6 text-sm text-slate-400">
-      Need an account?
-      <a href="{{ url_for('auth.register') }}" class="font-medium text-fuchsia-200 transition hover:text-white">Create one</a>
-    </p>
+    {% if config.ALLOW_PUBLIC_REGISTRATION %}
+      <p class="mt-6 text-sm text-slate-400">
+        Need an account?
+        <a href="{{ url_for('auth.register') }}" class="font-medium text-fuchsia-200 transition hover:text-white">Create one</a>
+      </p>
+    {% else %}
+      <div class="mt-6 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm leading-7 text-slate-300">
+        Public registration is disabled on this NovaDrive instance. Ask an admin to create an account for you.
+      </div>
+    {% endif %}
   </section>
 </div>
 {% endblock %}

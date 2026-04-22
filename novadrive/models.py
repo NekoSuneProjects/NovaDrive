@@ -33,6 +33,12 @@ class User(UserMixin, TimestampMixin, db.Model):
     last_login_at = db.Column(db.DateTime(timezone=True), nullable=True)
     email_verified_at = db.Column(db.DateTime(timezone=True), nullable=True)
     email_verification_sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    two_factor_secret = db.Column(db.String(64), nullable=True)
+    two_factor_pending_secret = db.Column(db.String(64), nullable=True)
+    two_factor_enabled_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    webdav_password_hash = db.Column(db.String(64), nullable=True)
+    webdav_password_last4 = db.Column(db.String(4), nullable=True)
+    webdav_password_created_at = db.Column(db.DateTime(timezone=True), nullable=True)
     api_key_hash = db.Column(db.String(64), nullable=True, index=True)
     api_key_last4 = db.Column(db.String(4), nullable=True)
     api_key_created_at = db.Column(db.DateTime(timezone=True), nullable=True)
@@ -71,8 +77,20 @@ class User(UserMixin, TimestampMixin, db.Model):
         return bool(self.api_key_hash)
 
     @property
+    def has_webdav_password(self) -> bool:
+        return bool(self.webdav_password_hash)
+
+    @property
     def is_email_verified(self) -> bool:
         return self.email_verified_at is not None
+
+    @property
+    def is_two_factor_enabled(self) -> bool:
+        return bool(self.two_factor_secret and self.two_factor_enabled_at)
+
+    @property
+    def has_pending_two_factor_setup(self) -> bool:
+        return bool(self.two_factor_pending_secret)
 
     @property
     def has_storage_quota(self) -> bool:

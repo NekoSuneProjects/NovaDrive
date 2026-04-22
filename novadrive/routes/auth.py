@@ -8,19 +8,33 @@ from flask_login import current_user, login_required, login_user, logout_user
 
 from novadrive.extensions import db
 from novadrive.models import User, utcnow
-from novadrive.forms import DefaultAdminSetupForm, LoginForm, RegistrationForm
+from novadrive.forms import (
+    DefaultAdminSetupForm,
+    LoginForm,
+    RegistrationForm,
+    TwoFactorChallengeForm,
+    TwoFactorDisableForm,
+)
 from novadrive.services.auth_service import AuthService
 from novadrive.services.email_service import EmailDeliveryError
 from novadrive.services.verification_service import VerificationService, VerificationTokenError
 from novadrive.utils.urls import external_url
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
+TWO_FACTOR_LOGIN_SESSION_KEYS = (
+    "nova_2fa_user_id",
+    "nova_2fa_remember",
+    "nova_2fa_next",
+)
 
 
 @auth_bp.route("/register", methods=["GET", "POST"])
 def register():
     if current_user.is_authenticated:
         return redirect(url_for("dashboard.index"))
+    if not current_app.config["ALLOW_PUBLIC_REGISTRATION"]:
+        flash("Public registration is disabled on this NovaDrive instance.", "error")
+        return redirect(url_for("auth.login"))
 
     form = RegistrationForm()
     if form.validate_on_submit():
@@ -72,36 +86,74 @@ def login():
     form = LoginForm()
     pending_verification_email = request.args.get("email", "").strip().lower()
     if form.validate_on_submit():
-        user = AuthService.authenticate(form.login.data, form.password.data)
+        _clear_pending_two_factor_login()
+        user = AuthService.authenticate(
+            form.login.data,
+            form.password.data,
+            record_login=False,
+        )
         if not user:
             flash("Invalid credentials. Please try again.", "error")
         elif not AuthService.can_use_password_login(user, current_app.config):
             pending_verification_email = user.email
             flash("Confirm your email before signing in.", "error")
-        else:
-            login_user(user, remember=form.remember.data)
-            session["nova_session_token"] = secrets.token_urlsafe(32)
-            session.permanent = True
-            AuthService.ensure_user_session(
+        elif user.is_two_factor_enabled:
+            _store_pending_two_factor_login(
                 user=user,
-                session_token=session["nova_session_token"],
-                user_agent=request.headers.get("User-Agent"),
-                ip_address=request.headers.get("X-Forwarded-For", request.remote_addr),
-                lifetime_hours=current_app.config["PERMANENT_SESSION_LIFETIME_HOURS"],
+                remember=form.remember.data,
+                next_target=request.args.get("next"),
             )
-            if AuthService.must_change_default_admin_credentials(user):
-                flash(
-                    "Default admin credentials are still active. Change the username, email, and password now.",
-                    "error",
-                )
-                return redirect(url_for("auth.complete_default_admin_setup"))
-            flash("Welcome back to NovaDrive.", "success")
-            return redirect(request.args.get("next") or url_for("dashboard.index"))
+            flash(
+                "Enter the 6-digit code from your authenticator app to finish signing in.",
+                "info",
+            )
+            return redirect(url_for("auth.two_factor_login"))
+        else:
+            return _complete_login(user, remember=form.remember.data, next_target=request.args.get("next"))
     return render_template(
         "auth/login.html",
         form=form,
         pending_verification_email=pending_verification_email,
     )
+
+
+@auth_bp.route("/login/two-factor", methods=["GET", "POST"])
+def two_factor_login():
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard.index"))
+
+    user = _get_pending_two_factor_user()
+    if not user:
+        _clear_pending_two_factor_login()
+        flash("Your two-factor sign-in session expired. Start again from the login page.", "error")
+        return redirect(url_for("auth.login"))
+
+    form = TwoFactorChallengeForm()
+    if form.validate_on_submit():
+        if not AuthService.can_use_password_login(user, current_app.config):
+            _clear_pending_two_factor_login()
+            flash("Confirm your email before signing in.", "error")
+            return redirect(url_for("auth.login", email=user.email))
+        if not user.is_two_factor_enabled:
+            _clear_pending_two_factor_login()
+            flash("Two-factor authentication is no longer enabled for this account. Sign in again.", "error")
+            return redirect(url_for("auth.login"))
+        if not AuthService.verify_two_factor_code(user.two_factor_secret, form.code.data):
+            flash("Invalid authentication code. Try the latest 6-digit code from your authenticator app.", "error")
+        else:
+            remember = bool(session.get("nova_2fa_remember"))
+            next_target = session.get("nova_2fa_next")
+            _clear_pending_two_factor_login()
+            return _complete_login(user, remember=remember, next_target=next_target)
+
+    return render_template("auth/two_factor_login.html", form=form, pending_user=user)
+
+
+@auth_bp.post("/login/two-factor/cancel")
+def cancel_two_factor_login():
+    _clear_pending_two_factor_login()
+    flash("Two-factor sign-in was cancelled.", "info")
+    return redirect(url_for("auth.login"))
 
 
 @auth_bp.route("/complete-default-admin", methods=["GET", "POST"])
@@ -161,6 +213,91 @@ def revoke_api_key():
     session.pop("nova_generated_api_key", None)
     flash("API key revoked.", "success")
     return redirect(request.referrer or url_for("dashboard.index"))
+
+
+@auth_bp.route("/webdav-password/regenerate", methods=["POST"])
+@login_required
+def regenerate_webdav_password():
+    session["nova_generated_webdav_password"] = AuthService.generate_webdav_password(current_user)
+    flash(
+        "A new WebDAV app password is ready. Copy it now because it will not be shown again.",
+        "success",
+    )
+    return redirect(request.referrer or url_for("dashboard.index"))
+
+
+@auth_bp.route("/webdav-password/revoke", methods=["POST"])
+@login_required
+def revoke_webdav_password():
+    AuthService.revoke_webdav_password(current_user)
+    session.pop("nova_generated_webdav_password", None)
+    flash("WebDAV app password revoked.", "success")
+    return redirect(request.referrer or url_for("dashboard.index"))
+
+
+@auth_bp.post("/two-factor/setup/start")
+@login_required
+def start_two_factor_setup():
+    if current_user.is_two_factor_enabled:
+        flash("Two-factor authentication is already enabled for this account.", "info")
+        return _security_redirect()
+    AuthService.begin_two_factor_setup(current_user, actor_id=current_user.id)
+    flash(
+        "A new two-factor secret is ready. Add it to your authenticator app, then enter the 6-digit code to enable 2FA.",
+        "success",
+    )
+    return _security_redirect()
+
+
+@auth_bp.post("/two-factor/setup/confirm")
+@login_required
+def confirm_two_factor_setup():
+    form = TwoFactorChallengeForm(prefix="two_factor_setup")
+    if not form.validate_on_submit():
+        flash("Enter the current 6-digit code from your authenticator app.", "error")
+        return _security_redirect()
+
+    try:
+        AuthService.confirm_two_factor_setup(
+            current_user,
+            form.code.data,
+            actor_id=current_user.id,
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+    else:
+        flash("Two-factor authentication is now enabled for your account.", "success")
+    return _security_redirect()
+
+
+@auth_bp.post("/two-factor/setup/cancel")
+@login_required
+def cancel_two_factor_setup():
+    AuthService.cancel_two_factor_setup(current_user, actor_id=current_user.id)
+    flash("Two-factor setup was cancelled.", "info")
+    return _security_redirect()
+
+
+@auth_bp.post("/two-factor/disable")
+@login_required
+def disable_two_factor():
+    form = TwoFactorDisableForm(prefix="two_factor_disable")
+    if not form.validate_on_submit():
+        flash("Enter your current password and a valid 6-digit authentication code.", "error")
+        return _security_redirect()
+
+    try:
+        AuthService.disable_two_factor(
+            current_user,
+            password=form.password.data,
+            code=form.code.data,
+            actor_id=current_user.id,
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+    else:
+        flash("Two-factor authentication has been disabled for this account.", "success")
+    return _security_redirect()
 
 
 @auth_bp.get("/verify-email/<token>")
@@ -229,3 +366,52 @@ def _send_verification_email(user: User) -> None:
         config=current_app.config,
     )
     AuthService.note_verification_email_sent(user)
+
+
+def _complete_login(user: User, *, remember: bool, next_target: str | None):
+    login_user(user, remember=remember)
+    session["nova_session_token"] = secrets.token_urlsafe(32)
+    session.permanent = True
+    AuthService.note_successful_login(user)
+    AuthService.ensure_user_session(
+        user=user,
+        session_token=session["nova_session_token"],
+        user_agent=request.headers.get("User-Agent"),
+        ip_address=request.headers.get("X-Forwarded-For", request.remote_addr),
+        lifetime_hours=current_app.config["PERMANENT_SESSION_LIFETIME_HOURS"],
+    )
+    if AuthService.must_change_default_admin_credentials(user):
+        flash(
+            "Default admin credentials are still active. Change the username, email, and password now.",
+            "error",
+        )
+        return redirect(url_for("auth.complete_default_admin_setup"))
+    flash("Welcome back to NovaDrive.", "success")
+    return redirect(next_target or url_for("dashboard.index"))
+
+
+def _store_pending_two_factor_login(
+    *,
+    user: User,
+    remember: bool,
+    next_target: str | None,
+) -> None:
+    session["nova_2fa_user_id"] = user.id
+    session["nova_2fa_remember"] = bool(remember)
+    session["nova_2fa_next"] = next_target or ""
+
+
+def _clear_pending_two_factor_login() -> None:
+    for key in TWO_FACTOR_LOGIN_SESSION_KEYS:
+        session.pop(key, None)
+
+
+def _get_pending_two_factor_user() -> User | None:
+    user_id = session.get("nova_2fa_user_id")
+    if not user_id:
+        return None
+    return db.session.get(User, int(user_id))
+
+
+def _security_redirect():
+    return redirect(url_for("dashboard.index", _anchor="security-panel"))

@@ -155,6 +155,8 @@ class Config:
         os.getenv("PERMANENT_SESSION_LIFETIME_HOURS"),
         24,
     )
+    ALLOW_PUBLIC_REGISTRATION = _as_bool(os.getenv("ALLOW_PUBLIC_REGISTRATION"), True)
+    TWO_FACTOR_ISSUER_NAME = (os.getenv("TWO_FACTOR_ISSUER_NAME") or APP_NAME).strip() or APP_NAME
 
     WTF_CSRF_TIME_LIMIT = None
 

@@ -51,7 +51,7 @@ class WebDavService:
         if not auth or not auth.username or auth.password is None:
             return None
 
-        user = AuthService.authenticate(auth.username, auth.password, record_login=False)
+        user = AuthService.authenticate_webdav_password(auth.username, auth.password)
         if not user:
             return None
         if not AuthService.can_use_password_login(user, current_app.config):

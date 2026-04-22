@@ -133,6 +133,18 @@ def _ensure_runtime_schema(app: Flask) -> None:
             statements.append('ALTER TABLE "user" ADD COLUMN email_verified_at TIMESTAMP')
         if "email_verification_sent_at" not in user_columns:
             statements.append('ALTER TABLE "user" ADD COLUMN email_verification_sent_at TIMESTAMP')
+        if "two_factor_secret" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN two_factor_secret VARCHAR(64)')
+        if "two_factor_pending_secret" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN two_factor_pending_secret VARCHAR(64)')
+        if "two_factor_enabled_at" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN two_factor_enabled_at TIMESTAMP')
+        if "webdav_password_hash" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN webdav_password_hash VARCHAR(64)')
+        if "webdav_password_last4" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN webdav_password_last4 VARCHAR(4)')
+        if "webdav_password_created_at" not in user_columns:
+            statements.append('ALTER TABLE "user" ADD COLUMN webdav_password_created_at TIMESTAMP')
         if "storage_quota_bytes" not in user_columns:
             statements.append('ALTER TABLE "user" ADD COLUMN storage_quota_bytes BIGINT')
         statements.append('CREATE INDEX IF NOT EXISTS ix_user_api_key_hash ON "user" (api_key_hash)')

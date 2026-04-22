@@ -56,6 +56,24 @@ class DefaultAdminSetupForm(FlaskForm):
     )
 
 
+class TwoFactorChallengeForm(FlaskForm):
+    code = StringField(
+        "Authentication code",
+        validators=[DataRequired(), Length(min=6, max=12)],
+    )
+
+
+class TwoFactorDisableForm(FlaskForm):
+    password = PasswordField(
+        "Current password",
+        validators=[DataRequired(), Length(min=8, max=128)],
+    )
+    code = StringField(
+        "Authentication code",
+        validators=[DataRequired(), Length(min=6, max=12)],
+    )
+
+
 class ShareLinkForm(FlaskForm):
     expires_at = DateTimeLocalField("Expires at", validators=[Optional()], format="%Y-%m-%dT%H:%M")
 

@@ -22,8 +22,10 @@ This repo gives you a clean base to keep building from.
 
 - Secure authentication with hashed passwords and signed session cookies
 - One-time bootstrap admin account with forced username, email, and password rotation on first sign-in
+- Public registration toggle so the site can run as login-only while admins create accounts manually
 - Optional SMTP-backed email verification for account activation
-- WebDAV support for direct upload, download, folder creation, delete, and move from desktop/mobile clients
+- Optional TOTP two-factor authentication for browser login
+- WebDAV support for direct upload, download, folder creation, delete, and move from desktop/mobile clients using per-user app passwords
 - S3-compatible storage mode for AWS S3, MinIO, and other compatible providers
 - Per-user storage quotas with a 10 GB default cap for standard users and admin overrides from the admin console
 - Expanded admin console with account creation, role/profile/quota controls, and direct user-drive management
@@ -128,7 +130,10 @@ README.md                 You are here
 - Password hashing
 - Session cookie auth
 - One-time bootstrap admin account is created automatically on a fresh database
+- Public self-registration can be disabled so only admin-created accounts can sign in
 - Optional email verification before password login and WebDAV access
+- Optional TOTP-based two-factor authentication for browser logins
+- Per-user WebDAV app password generation and rotation without exposing the main account password to clients
 - Basic `admin` and `user` role model with admin role reassignment from the admin console
 - Default per-user storage caps with admin-adjustable per-account quota overrides
 - Admin-created accounts with controlled verification state and role assignment
@@ -162,7 +167,7 @@ README.md                 You are here
 
 - Basic-auth WebDAV endpoint scoped to the authenticated user's drive
 - `PROPFIND`, `GET`, `HEAD`, `PUT`, `MKCOL`, `DELETE`, `MOVE`, and `OPTIONS`
-- Desktop and mobile client support using normal NovaDrive credentials
+- Desktop and mobile client support using username/email plus a generated WebDAV app password
 - Works for verified multi-user accounts without exposing the global admin view
 - The bootstrap admin must complete the forced credential-change flow before WebDAV auth is allowed
 
@@ -315,6 +320,8 @@ The default admin is only bootstrapped once per database and is not recreated au
 
 If `EMAIL_VERIFICATION_REQUIRED=true`, new accounts must confirm their email before normal login and WebDAV access are enabled.
 
+If `ALLOW_PUBLIC_REGISTRATION=false`, the public `/auth/register` page is disabled and users must be created by an admin or through the CLI.
+
 If NovaDrive sits behind nginx, Traefik, Caddy, Cloudflare, or another reverse proxy, set `APP_EXTERNAL_URL` to the public host you want NovaDrive to generate:
 
 ```text
@@ -373,6 +380,8 @@ Recommended bot permissions:
 | `DEFAULT_ADMIN_STORAGE_QUOTA_BYTES` | Default storage cap applied to new admin users, `0` for unlimited | `0` |
 | `SESSION_COOKIE_SECURE` | Marks login cookies as HTTPS-only in production | `true` |
 | `PERMANENT_SESSION_LIFETIME_HOURS` | Persistent login lifetime | `24` |
+| `ALLOW_PUBLIC_REGISTRATION` | Enables or disables the public `/auth/register` page. When `false`, only existing accounts can sign in and admins/CLI must create users. | `true` |
+| `TWO_FACTOR_ISSUER_NAME` | Issuer label written into TOTP authenticator app entries during 2FA setup | `NovaDrive` |
 | `STORAGE_BACKEND` | Primary blob backend, `discord` or `s3` | `s3` |
 | `ALLOW_PUBLIC_SHARING` | Enables share link generation | `true` |
 | `SOFT_DELETE_ENABLED` | Keeps deleted items out of active view by default | `true` |
@@ -445,6 +454,17 @@ Important notes:
 - If ShareX reports HTML or `405 Method Not Allowed` instead of JSON, it is usually still hitting an old non-HTTPS uploader URL and getting redirected before the upload request reaches NovaDrive correctly.
 - If you deploy behind Cloudflare Tunnel, enable `CLOUDFLARE_TUNNEL_COMPAT=true` so NovaDrive caps uploads before Cloudflare rejects the request body.
 
+## Two-factor authentication quick start
+
+NovaDrive now supports per-account TOTP 2FA for browser login.
+
+1. Sign in to NovaDrive.
+2. Open the dashboard and scroll to the `Account Security` panel.
+3. Click `Generate 2FA Setup Secret`.
+4. Add the displayed secret to your authenticator app, or import the shown `otpauth://` URI if your app supports it.
+5. Enter the current 6-digit code from the app and click `Enable 2FA`.
+6. On the next browser login, NovaDrive will ask for the 6-digit code after your password.
+
 ## WebDAV quick start
 
 NovaDrive now exposes a built-in WebDAV endpoint at `/dav/`.
@@ -453,7 +473,7 @@ Use these settings in a WebDAV-capable client:
 
 - URL: `https://your-host/dav/`
 - Username: your NovaDrive username or email
-- Password: your normal NovaDrive password
+- Password: your generated WebDAV app password from the NovaDrive dashboard
 
 Notes:
 
@@ -461,6 +481,7 @@ Notes:
 - Admins still get their own drive over WebDAV, not the full global admin scope.
 - The built-in bootstrap admin cannot use WebDAV until the forced credential-change screen has been completed.
 - If email verification is required, the account must be verified before WebDAV login works.
+- Browser TOTP 2FA currently protects the web sign-in flow only. WebDAV uses username/email plus the dedicated app password.
 - If the account reaches its storage quota, WebDAV uploads are blocked until an admin raises the limit or files are deleted.
 - Use the same public HTTPS host you set in `APP_EXTERNAL_URL` if the app is behind a reverse proxy.
 
@@ -510,11 +531,13 @@ NovaDrive already includes a solid MVP baseline:
 - Passwords are hashed, not stored in plaintext
 - CSRF protection is enabled with Flask-WTF
 - Sessions use signed cookies
+- Optional TOTP 2FA can protect browser logins with a second factor
 - Secrets are loaded from environment variables
 - Files are not stored permanently on the web server during upload
 - Downloads are rebuilt only after checksum validation
 - Share links can be disabled globally or set to expire
 - API keys are stored as SHA256 hashes, not plaintext
+- WebDAV app passwords are stored as SHA256 hashes, not plaintext
 - Verification links are signed and time-limited
 - Per-user storage quotas are enforced across browser uploads, ShareX, and WebDAV
 
@@ -717,6 +740,7 @@ Check:
 - Shared downloads rebuild files on demand, which can use temporary memory or disk buffering for large files.
 - Inline previews still rebuild files from stored chunks on demand, so very large media is functional but not as efficient as a dedicated streaming backend.
 - WebDAV is intentionally lightweight and focuses on common client flows rather than the full Nextcloud protocol surface such as locking, versioning, comments, and sync metadata.
+- TOTP 2FA currently covers browser login only. WebDAV and API-key workflows keep their existing authentication model.
 - The Discord bot bridge is intentionally simple for local development and MVP use. Larger deployments should put a stronger internal service boundary in front of Discord I/O.
 - The admin surface now handles account creation, profile updates, quotas, and direct user-drive management, but it is still not a full in-app configuration editor.
 - S3 support currently acts as the primary backend for NovaDrive storage. Full per-user external bucket mounting like Nextcloud external storage is still a future step.
@@ -726,7 +750,7 @@ Check:
 
 - Add resumable browser uploads with persisted client-side upload sessions
 - Move long-running chunk operations into background jobs
-- Add app passwords or per-device WebDAV credentials instead of reusing the main password
+- Add multiple per-device WebDAV app passwords instead of the current single password per account
 - Add storage policies for paid tiers, group quotas, and delegated admin scopes
 - Add PDF/document-specific preview flows and syntax highlighting for code/text
 - Add recycle bin restore flows and bulk actions

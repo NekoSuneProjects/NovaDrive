@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from flask import Blueprint, abort, render_template, request, session
+from flask import Blueprint, abort, current_app, render_template, request, session
 from flask_login import current_user, login_required
 
+from novadrive.forms import TwoFactorChallengeForm, TwoFactorDisableForm
 from novadrive.models import ActivityLog
+from novadrive.services.auth_service import AuthService
 from novadrive.services.file_service import AccessError, FileService
 
 dashboard_bp = Blueprint("dashboard", __name__)
@@ -43,6 +45,16 @@ def index():
         .limit(8)
         .all()
     )
+    two_factor_setup_secret = current_user.two_factor_pending_secret
+    two_factor_setup_uri = (
+        AuthService.build_two_factor_uri(
+            current_user,
+            two_factor_setup_secret,
+            current_app.config["TWO_FACTOR_ISSUER_NAME"],
+        )
+        if two_factor_setup_secret
+        else None
+    )
 
     return render_template(
         "dashboard/index.html",
@@ -60,4 +72,9 @@ def index():
         type_filter=type_filter,
         view_mode=view_mode,
         generated_api_key=session.pop("nova_generated_api_key", None),
+        generated_webdav_password=session.pop("nova_generated_webdav_password", None),
+        two_factor_setup_form=TwoFactorChallengeForm(prefix="two_factor_setup"),
+        two_factor_disable_form=TwoFactorDisableForm(prefix="two_factor_disable"),
+        two_factor_setup_secret=two_factor_setup_secret,
+        two_factor_setup_uri=two_factor_setup_uri,
     )
